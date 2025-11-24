@@ -7,3 +7,6 @@ streaming.sqlite-journal
 
 # Ignorar archivos del sistema operativo
 .DS_Store
+
+# Ignorar claves privadas/públicas y archivo de entorno
+.env

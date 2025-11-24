@@ -16,7 +16,8 @@
     <!-- Verifica si el usuario tiene token. Si no, lo manda al login -->
     <script>
         if (!localStorage.getItem('jwt')) {
-            window.location.href = 'login.html';
+            // usar replace para no quedar en el historial
+            window.location.replace('login.html');
         }
     </script>
 </head>
@@ -24,21 +25,57 @@
 <body class="bg-gray-900 text-white font-sans">
 
     <!-- Header -->
-    <header class="bg-gray-800 shadow-lg">
-        <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
-            <div class="text-2xl font-bold text-white">CryptoStream</div>
-            <div>
-                <span id="user-display" class="mr-4"></span>
+    <header style="background: #1f2937; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+        <nav class="container mx-auto px-6 py-4 flex items-center justify-between">
+            <!-- Logo and Text -->
+            <div id="logo-home" class="relative flex items-center cursor-pointer" style="min-width:200px; flex-shrink:0;">
+                <span style="display:inline-block; width:44px; height:44px; border-radius:50%; background: linear-gradient(135deg, #323470 75%, #3f2a71 50%); box-shadow: 0 2px 8px rgba(13, 10, 54, 0.3); position:absolute; left:0; top:50%; transform:translateY(-50%); z-index:0;">
+                    <svg width="44" height="44" viewBox="0 0 44 44" style="position:absolute; top:0; left:0;">
+                        <polygon points="18,14 34,22 18,30" fill="#341c6c" opacity="0.9"/>
+                    </svg>
+                </span>
+                <span class="text-2xl font-bold text-white relative" style="letter-spacing:-0.5px; padding-left:28px; z-index:1;">CryptoStream</span>
+            </div>
+
+            <!-- Search Bar - Center -->
+            <div class="flex-1 mx-6" style="max-width:600px;">
+                <div class="relative">
+                    <input type="text" id="search-input" placeholder="Buscar videos..." 
+                        class="w-full px-4 py-2 pl-10 bg-gray-700 text-white border border-gray-600 rounded-lg focus:outline-none focus:border-indigo-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- User Info and Logout Button - Right -->
+            <div class="flex items-center" style="min-width:200px; flex-shrink:0; justify-content:flex-end;">
+                <!-- Mensaje de bienvenida primero -->
+                <span id="user-display" class="mr-4 text-white font-medium"></span>
+                
+                <!-- Notification Bell -->
+                <div id="notification-bell" class="relative mr-4 cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-300 hover:text-white transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <!-- Badge de contador -->
+                    <span id="notification-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">0</span>
+                </div>
+                
+                <!-- Botón salir al final -->
                 <button id="logout-button" 
-                        class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
                     Salir
                 </button>
             </div>
         </nav>
     </header>
 
+    <!-- Saludo persistente (fallback): se muestra en la esquina superior derecha si el header se modifica -->
+    <div id="user-greeting-fixed" class="fixed right-6 top-4 text-white font-medium z-50 hidden"></div>
+
     <!-- Tabs -->
-    <div class="bg-gray-700">
+        <div class="bg-gray-700">
         <div class="container mx-auto px-6 flex">
             <button id="nav-watch" 
                     class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-blue-500 text-white">
@@ -49,8 +86,18 @@
                     class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
                 Subir Video
             </button>
+
+            <button id="nav-modify"
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
+                Modificar Videos
+            </button>
+
+            <button id="nav-requests"
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
+                Solicitudes
+            </button>
         </div>
-    </div>
+        </div>
 
     <!-- Main Content -->
     <main class="container mx-auto p-6">
@@ -59,19 +106,26 @@
         <section id="watch-section" class="content-section active">
             <h2 class="text-3xl font-semibold mb-6">Videos Disponibles</h2>
 
-            <div id="video-grid" 
-                class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        <div id="video-player-container" class="hidden mb-8 bg-black rounded-lg overflow-hidden shadow-xl animate-fade-in">
+            <div class="bg-gray-900 p-3 flex justify-between items-center">
+                 <h3 id="playing-title" class="text-white font-bold truncate"></h3>
+                 <button onclick="closeVideo()" class="text-indigo-400 hover:text-indigo-600">✕ Cerrar</button>
+            </div>
+            <video id="secure-video-player" controls class="w-full aspect-video bg-black"></video>
+        </div>
+        <div id="video-list" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
 
                 <!-- Ejemplo -->
-                <div class="video-card bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer" data-video-id="1">
-                    <img src="https://placehold.co/600x400/1f2937/7dd3fc?text=Video+1" 
-                        class="w-full h-48 object-cover">
-                    <div class="p-4">
-                        <h3 class="font-bold text-lg">Video de Prueba 1</h3>
-                        <p class="text-gray-400 text-sm">Subido por Creador</p>
-                    </div>
-                </div>
+                <!-- Grid vacío: se poblara desde JS -->
+                <p id="no-videos" class="text-gray-400 text-center w-full hidden">No hay videos aún.</p>
 
+            </div>
+        </section>
+
+        <!-- Solicitudes -->
+        <section id="requests-section" class="content-section">
+            <h2 class="text-3xl font-semibold mb-6">Gestionar Solicitudes de Acceso</h2>
+            <div id="requests-list" class="space-y-4">
             </div>
         </section>
 
@@ -80,7 +134,7 @@
             <h2 class="text-3xl font-semibold mb-6">Subir Nuevo Video</h2>
 
             <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-lg mx-auto">
-                <form id="upload-form">
+                <form id="upload-form" novalidate>
 
                     <div class="mb-4">
                         <label for="video-title" class="block text-sm font-medium text-gray-300 mb-2">
@@ -90,16 +144,25 @@
                                 class="w-full px-3 py-2 bg-gray-700 text-white border border-gray-600 rounded-lg" required>
                     </div>
 
+                    <div class="mb-4">
+                        <label for="video-description" class="block text-sm font-medium text-gray-300 mb-2">
+                            Descripción del Video
+                        </label>
+                        <textarea id="video-description" rows="4"
+                                class="w-full px-3 py-2 bg-gray-700 text-white border border-gray-600 rounded-lg" 
+                                placeholder="Describe tu video..."></textarea>
+                    </div>
+
                     <div class="mb-6">
                         <label for="video-file" class="block text-sm font-medium text-gray-300 mb-2">
                             Archivo del Video
                         </label>
                         <input type="file" id="video-file"
-                                class="w-full text-sm text-gray-400
+                                class="w-full text-sm text-gray-400 cursor-pointer
                                     file:mr-4 file:py-2 file:px-4
                                     file:rounded-lg file:border-0 file:font-semibold
                                     file:bg-blue-600 file:text-white
-                                    hover:file:bg-blue-700" required>
+                                    hover:file:bg-blue-700 file:cursor-pointer">
                     </div>
 
                     <button type="submit"
@@ -109,6 +172,14 @@
 
                     <p id="upload-status" class="text-green-400 text-center text-sm mt-4"></p>
                 </form>
+            </div>
+        </section>
+
+        <!-- Modificar Videos -->
+        <section id="modify-section" class="content-section">
+            <h2 class="text-3xl font-semibold mb-6">Modificar Mis Videos</h2>
+            <div id="modify-videos-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Los videos del usuario se cargarán aquí dinámicamente -->
             </div>
         </section>
 
@@ -129,37 +200,75 @@
 
     </main>
 
-    <!-- Script: Mostrar usuario y Logout -->
+    <!-- User greeting and logout are handled in `app.js` to keep logic centralized -->
+
+    <!-- Toast container (se usa desde app.js) -->
+    <div id="toast-container" class="fixed bottom-4 right-4 flex flex-col-reverse gap-2 z-50"></div>
+
+    <!-- Cargar libsodium antes del script principal (WebAssembly).
+         Usamos un pequeño loader que intenta varios CDNs y expone
+         `window.__sodiumLoadPromise` para depurar/esperar su carga. -->
     <script>
-        function parseJwt(token) {
-            try { return JSON.parse(atob(token.split('.')[1])); }
-            catch { return null; }
-        }
+        (function(){
+            const candidates = [
+                'https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/sodium.js',
+                'https://unpkg.com/libsodium-wrappers@0.7.13/dist/sodium.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.13/sodium.min.js'
+            ];
 
-        const token = localStorage.getItem("jwt");
-        const username = localStorage.getItem("username");
-
-        // Usar el username de localStorage si existe
-        if (username) {
-            document.getElementById("user-display").innerText = "Hola, " + username;
-        } else {
-            // Fallback: intentar extraer del JWT
-            const payload = parseJwt(token);
-            if (payload && payload.username) {
-                document.getElementById("user-display").innerText = "Hola, " + payload.username;
+            function tryLoad(url){
+                return new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = url;
+                    s.async = true;
+                    s.onload = () => {
+                        // allow the script to initialize window.sodium
+                        setTimeout(() => {
+                            if (window.sodium) return resolve(window.sodium);
+                            // some CDNs attach different names, but libsodium-wrappers uses `sodium`
+                            return reject(new Error('sodium not found after load'));
+                        }, 50);
+                    };
+                    s.onerror = () => reject(new Error('failed to load ' + url));
+                    document.head.appendChild(s);
+                });
             }
-        }
 
-        document.getElementById("logout-button").addEventListener("click", () => {
-            localStorage.removeItem("jwt");
-            localStorage.removeItem("username");
-            localStorage.removeItem("registrationMessage");
-            window.location.href = "login.html";
-        });
+            // Try sequentially until one works
+            let p = Promise.reject();
+            candidates.forEach((url) => {
+                p = p.catch(() => tryLoad(url));
+            });
+
+            // Expose a promise for other scripts to await if desired
+            window.__sodiumLoadPromise = p.then((sodium) => {
+                try { console.log('[libsodium-loader] cargado:', sodium ? 'sodium ok' : 'no sodium'); } catch(e){}
+                return sodium;
+            }).catch((err) => {
+                console.warn('[libsodium-loader] No se pudo cargar libsodium desde CDNs:', err);
+                return null;
+            });
+        })();
     </script>
 
     <!-- Script principal -->
     <script src="app.js"></script>
+
+    <script>
+        // Hacer clickeable el logo para ir a Ver Videos
+        document.addEventListener('DOMContentLoaded', () => {
+            const logo = document.getElementById('logo-home');
+            if (logo) {
+                logo.addEventListener('click', () => {
+                    // Navegar al tab de Ver Videos
+                    const navWatchBtn = document.getElementById('nav-watch');
+                    if (navWatchBtn) {
+                        navWatchBtn.click();
+                    }
+                });
+            }
+        });
+    </script>
 
 </body>
 </html>

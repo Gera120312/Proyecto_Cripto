@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Playback</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white">
+    <!-- Header igual al dashboard principal -->
+    <header style="background: #1f2937; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+        <nav class="container mx-auto px-6 py-4 flex items-center justify-between">
+            <div id="logo-home" class="relative flex items-center cursor-pointer" style="min-width:200px; flex-shrink:0;">
+                <span style="display:inline-block; width:44px; height:44px; border-radius:50%; background: linear-gradient(135deg, #323470 75%, #3f2a71 50%); box-shadow: 0 2px 8px rgba(13, 10, 54, 0.3); position:absolute; left:0; top:50%; transform:translateY(-50%); z-index:0;">
+                    <svg width="44" height="44" viewBox="0 0 44 44" style="position:absolute; top:0; left:0;">
+                        <polygon points="18,14 34,22 18,30" fill="#341c6c" opacity="0.9"/>
+                    </svg>
+                </span>
+                <span class="text-2xl font-bold text-white relative" style="letter-spacing:-0.5px; padding-left:28px; z-index:1;">CryptoStream</span>
+            </div>
+            
+            <!-- Search Bar - Center -->
+            <div class="flex-1 mx-6" style="max-width:600px;">
+                <div class="relative">
+                    <input type="text" id="search-input" placeholder="Buscar videos..." 
+                        class="w-full px-4 py-2 pl-10 bg-gray-700 text-white border border-gray-600 rounded-lg focus:outline-none focus:border-indigo-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+            </div>
+            
+            <div class="flex items-center" style="min-width:200px; flex-shrink:0; justify-content:flex-end;">
+                <!-- Mensaje de bienvenida primero -->
+                <span id="user-display" class="mr-4 text-white font-medium"></span>
+                
+                <!-- Notification Bell -->
+                <div id="notification-bell" class="relative mr-4 cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-300 hover:text-white transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <span id="notification-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">0</span>
+                </div>
+                
+                <!-- Botón salir al final -->
+                <button id="logout-button" 
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                    Salir
+                </button>
+            </div>
+        </nav>
+    </header>
+    <div class="bg-gray-700">
+        <div class="container mx-auto px-6 flex">
+            <button id="nav-watch" 
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-blue-500 text-white">
+                Ver Videos
+            </button>
+
+            <button id="nav-upload" 
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
+                Subir Video
+            </button>
+
+            <button id="nav-modify"
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
+                Modificar Videos
+            </button>
+
+            <button id="nav-requests"
+                    class="tab-button flex-1 text-center py-4 px-6 font-semibold border-b-4 border-transparent text-gray-400">
+                Solicitudes
+            </button>
+        </div>
+    </div>
+
+    <div class="mx-auto px-6 py-6">
+        <div class="flex gap-8">
+            <!-- Video Player Section (Left Side) -->
+            <div class="flex-1">
+                <video id="video-player" controls class="w-full rounded-lg shadow-lg bg-black"></video>
+                <div class="mt-4 bg-gray-800 p-4 rounded-lg">
+                    <h1 id="video-title" class="text-2xl font-bold mb-2"></h1>
+                    <p id="video-author" class="text-gray-300 mb-3">Por: <span class="font-semibold text-white">Cargando...</span></p>
+                    <div class="border-t border-gray-700 pt-3">
+                        <h3 class="text-sm font-semibold text-gray-400 mb-2">Descripción</h3>
+                        <p id="video-description" class="text-gray-300">Cargando descripción...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recommended Videos Section (Right Side) -->
+            <div class="w-96 flex-shrink-0">
+                <h2 class="text-xl font-semibold mb-4">Videos Recomendados</h2>
+                <ul id="recommended-videos" class="space-y-4">
+                    <!-- Video items will be dynamically added here -->
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script src="video.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Show username in header
+            const username = localStorage.getItem('username');
+            const usernameSpan = document.getElementById('user-display');
+            if (username && usernameSpan) {
+                usernameSpan.textContent = 'Hola, ' + username;
+            }
+
+            // Setup logout button
+            const logoutBtn = document.getElementById('logout-button');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', () => {
+                    try {
+                        localStorage.removeItem('jwt');
+                        localStorage.removeItem('username');
+                        localStorage.removeItem('registrationMessage');
+                        localStorage.removeItem('currentVideo');
+                    } catch (e) { /* ignore */ }
+                    window.location.href = 'login.html';
+                });
+            }
+
+            // Setup navigation buttons
+            const tabVideosBtn = document.getElementById('nav-watch');
+            const tabUploadBtn = document.getElementById('nav-upload');
+            const tabModifyBtn = document.getElementById('nav-modify');
+            const tabRequestsBtn = document.getElementById('nav-requests');
+
+            if (tabVideosBtn) {
+                tabVideosBtn.addEventListener('click', () => {
+                    window.location.href = 'index.html';
+                });
+            }
+
+            if (tabUploadBtn) {
+                tabUploadBtn.addEventListener('click', () => {
+                    sessionStorage.setItem('activeSection', 'upload');
+                    window.location.href = 'index.html';
+                });
+            }
+
+            if (tabModifyBtn) {
+                tabModifyBtn.addEventListener('click', () => {
+                    sessionStorage.setItem('activeSection', 'modify');
+                    window.location.href = 'index.html';
+                });
+            }
+
+            if (tabRequestsBtn) {
+                tabRequestsBtn.addEventListener('click', () => {
+                    sessionStorage.setItem('activeSection', 'requests');
+                    window.location.href = 'index.html';
+                });
+            }
+
+            // Search functionality with suggestions
+            const searchInput = document.getElementById('search-input');
+            let suggestionsContainer = null;
+            let selectedSuggestionIndex = -1;
+            let allVideos = []; // Almacenar todos los videos disponibles
+            
+            // Cargar todos los videos para las sugerencias de búsqueda
+            const token = localStorage.getItem('jwt') || localStorage.getItem('jwtToken');
+            if (token) {
+                fetch('http://localhost:3000/videos', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                })
+                .then(response => {
+                    if (!response.ok) throw new Error('Error fetching videos');
+                    return response.json();
+                })
+                .then(videos => {
+                    allVideos = videos; // Guardar todos los videos para las búsquedas
+                })
+                .catch(error => {
+                    console.error('Error fetching all videos for search:', error);
+                });
+            }
+            
+            if (searchInput) {
+                // Create suggestions dropdown
+                suggestionsContainer = document.createElement('div');
+                suggestionsContainer.id = 'search-suggestions';
+                suggestionsContainer.className = 'absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-lg max-h-80 overflow-y-auto hidden z-50';
+                searchInput.parentElement.appendChild(suggestionsContainer);
+                searchInput.parentElement.classList.add('relative');
+                
+                // Show suggestions as user types
+                searchInput.addEventListener('input', (e) => {
+                    const query = e.target.value.toLowerCase().trim();
+                    selectedSuggestionIndex = -1;
+                    
+                    if (query === '') {
+                        suggestionsContainer.innerHTML = '';
+                        suggestionsContainer.classList.add('hidden');
+                        return;
+                    }
+                    
+                    // Buscar en TODOS los videos, no solo los recomendados
+                    const matches = [];
+                    
+                    allVideos.forEach(video => {
+                        const title = video.title || '';
+                        const uploader = video.uploader || '';
+                        
+                        if (title.toLowerCase().includes(query) || uploader.toLowerCase().includes(query)) {
+                            matches.push({ title, uploader });
+                        }
+                    });
+                    
+                    if (matches.length > 0) {
+                        suggestionsContainer.innerHTML = matches.slice(0, 5).map(match => `
+                            <div class="px-4 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-b-0" data-title="${match.title.replace(/"/g, '&quot;')}">
+                                <div class="font-semibold text-white">${match.title}</div>
+                                <div class="text-sm text-gray-400">${match.uploader}</div>
+                            </div>
+                        `).join('');
+                        suggestionsContainer.classList.remove('hidden');
+                        
+                        // Add click handlers to suggestions
+                        suggestionsContainer.querySelectorAll('[data-title]').forEach(suggestion => {
+                            suggestion.addEventListener('click', () => {
+                                const title = suggestion.getAttribute('data-title');
+                                sessionStorage.setItem('searchQuery', title);
+                                window.location.href = 'index.html';
+                            });
+                        });
+                    } else {
+                        suggestionsContainer.innerHTML = '<div class="px-4 py-2 text-gray-400 text-center">No se encontraron resultados</div>';
+                        suggestionsContainer.classList.remove('hidden');
+                    }
+                });
+                
+                // Handle keyboard navigation
+                searchInput.addEventListener('keydown', (e) => {
+                    const suggestions = suggestionsContainer.querySelectorAll('[data-title]');
+                    
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (suggestions.length > 0) {
+                            selectedSuggestionIndex = Math.min(selectedSuggestionIndex + 1, suggestions.length - 1);
+                            updateSelectedSuggestion(suggestions);
+                        }
+                        return;
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (suggestions.length > 0) {
+                            selectedSuggestionIndex = Math.max(selectedSuggestionIndex - 1, -1);
+                            updateSelectedSuggestion(suggestions);
+                        }
+                        return;
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        
+                        if (selectedSuggestionIndex >= 0 && suggestions[selectedSuggestionIndex]) {
+                            const selectedTitle = suggestions[selectedSuggestionIndex].getAttribute('data-title');
+                            sessionStorage.setItem('searchQuery', selectedTitle);
+                            window.location.href = 'index.html';
+                            return;
+                        }
+                        
+                        const query = searchInput.value.trim();
+                        if (query) {
+                            sessionStorage.setItem('searchQuery', query);
+                        }
+                        window.location.href = 'index.html';
+                    }
+                });
+                
+                // Hide suggestions when clicking outside
+                document.addEventListener('click', (e) => {
+                    if (!searchInput.contains(e.target) && !suggestionsContainer.contains(e.target)) {
+                        suggestionsContainer.classList.add('hidden');
+                    }
+                });
+                
+                // Helper function to highlight selected suggestion
+                function updateSelectedSuggestion(suggestions) {
+                    suggestions.forEach((suggestion, index) => {
+                        if (index === selectedSuggestionIndex) {
+                            suggestion.classList.add('bg-gray-700');
+                            suggestion.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                        } else {
+                            suggestion.classList.remove('bg-gray-700');
+                        }
+                    });
+                }
+            }
+            
+            // Make logo clickeable to go to Ver Videos
+            const logo = document.getElementById('logo-home');
+            if (logo) {
+                logo.addEventListener('click', () => {
+                    window.location.href = 'index.html';
+                });
+            }
+        });
+    </script>
+</body>
+</html>
