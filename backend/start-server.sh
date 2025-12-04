@@ -12,20 +12,42 @@
 # Si las claves NO EXISTEN, el script las generará automáticamente.
 # ═══════════════════════════════════════════════════════════════════════════
 
-echo "🚀 Iniciando CryptoStream Backend..."
+echo "Iniciando CryptoStream Backend..."
 echo ""
 
-# Verificar si las claves ECDSA existen
-if [ ! -f "keys/private.pem" ] || [ ! -f "keys/public.pem" ]; then
-    echo "⚠️  Claves ECDSA no encontradas."
-    echo "📦 Generando nuevo par de claves..."
+# Verificar si el archivo .env existe
+if [ ! -f ".env" ]; then
+    echo "Archivo .env no encontrado."
+    echo "Creando .env desde .env.example..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo "✓ Archivo .env creado"
+    else
+        echo "⚠ Advertencia: .env.example no encontrado"
+    fi
+    echo ""
+fi
+
+# Verificar si las claves ECDSA están en .env
+if ! grep -q "ECDSA_PRIVATE_KEY=" .env || ! grep -q "ECDSA_PUBLIC_KEY=" .env; then
+    echo "Claves ECDSA no encontradas en .env"
+    echo "Generando nuevo par de claves..."
     echo ""
     node generate-keys.js
     echo ""
 fi
 
-echo "✅ Claves ECDSA verificadas"
-echo "🌐 Iniciando servidor Node.js..."
+# Verificar si la Master Key está en .env
+if ! grep -q "MASTER_KEY=" .env || grep -q "MASTER_KEY=generar_con_generate-master-key.js" .env; then
+    echo "Master Key no encontrada en .env"
+    echo "Generando Master Key..."
+    echo ""
+    node generate-master-key.js
+    echo ""
+fi
+
+echo "✓ Variables de entorno verificadas"
+echo "Iniciando servidor Node.js..."
 echo ""
 
 npm start

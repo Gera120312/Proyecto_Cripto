@@ -1,2 +1,8 @@
-keys/
 *.pem
+.env
+streaming.sqlite
+streaming.sqlite-journal
+node_modules/
+uploads/temp/*
+uploads/encrypted/*
+uploads/thumbnails/*
