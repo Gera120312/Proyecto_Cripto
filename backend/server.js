@@ -7,49 +7,54 @@ const dbPromise = require('./database.js');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { encryptVideo, initializeMasterKey } = require('./cryptoService.js');
+const { encryptVideo, initializeRSAKeys } = require('./cryptoService.js');
 
 // --- 2. Configuración ---
 const app = express();
 const PORT = 3000;
 
 // ═══════════════════════════════════════════════════════════════════
-// KEY WRAPPING - MASTER KEY
+// KEY WRAPPING - CLAVES RSA
 // ═══════════════════════════════════════════════════════════════════
 //
-//  MASTER KEY:
-//    - Se usa para ENVOLVER (cifrar) las llaves de los videos
-//    - NUNCA debe almacenarse en la base de datos
-//    - Debe guardarse como variable de entorno o en un gestor de secretos
-//    - Si se pierde, NO SE PODRÁN descifrar los videos
+//  CLAVES RSA:
+//    - Se usan para ENVOLVER (cifrar) las llaves de los videos con RSA-OAEP
+//    - La clave pública cifra las llaves de video
+//    - La clave privada descifra las llaves de video
+//    - NUNCA deben almacenarse en la base de datos
+//    - Deben guardarse como variables de entorno o en un gestor de secretos
+//    - Si se pierde la clave privada, NO SE PODRÁN descifrar los videos
 //
 //  Flujo de seguridad:
 //    1. Video Key (generada aleatoriamente) → Cifra el video
-//    2. Master Key (de variable de entorno) → Cifra la Video Key
+//    2. Clave pública RSA (de variable de entorno) → Cifra la Video Key con RSA-OAEP
 //    3. Solo la Video Key cifrada se guarda en la BD
 //
 //  Beneficio: Incluso si un atacante roba la BD, las llaves están
-//             cifradas y son inútiles sin la Master Key.
+//             cifradas con RSA-OAEP y son inútiles sin la clave privada RSA.
 //
 // ═══════════════════════════════════════════════════════════════════
 
-// Cargar y validar la Master Key desde variables de entorno
-const MASTER_KEY_HEX = process.env.MASTER_KEY;
-if (!MASTER_KEY_HEX) {
+// Cargar y validar las claves RSA desde variables de entorno
+const RSA_PUBLIC_KEY_ENV = process.env.RSA_PUBLIC_KEY;
+const RSA_PRIVATE_KEY_ENV = process.env.RSA_PRIVATE_KEY;
+
+if (!RSA_PUBLIC_KEY_ENV || !RSA_PRIVATE_KEY_ENV) {
     console.error('');
     console.error('═'.repeat(70));
-    console.error('ERROR CRÍTICO: MASTER_KEY no está definida');
+    console.error('ERROR CRÍTICO: Claves RSA no están definidas');
     console.error('═'.repeat(70));
     console.error('');
-    console.error('La aplicación requiere una MASTER_KEY para proteger las llaves');
-    console.error('de los videos mediante Key Wrapping.');
+    console.error('La aplicación requiere claves RSA para proteger las llaves');
+    console.error('de los videos mediante Key Wrapping con RSA-OAEP.');
     console.error('');
     console.error('SOLUCIÓN:');
-    console.error('1. Ejecuta el generador de llaves:');
-    console.error('   node generate-master-key.js');
+    console.error('1. Ejecuta el generador de claves:');
+    console.error('   node generate-rsa-keys.js');
     console.error('');
-    console.error('2. Copia la llave generada al archivo .env:');
-    console.error('   MASTER_KEY=<llave_generada_en_hex>');
+    console.error('2. Verifica que el archivo .env contenga:');
+    console.error('   RSA_PUBLIC_KEY=<clave_publica_generada>');
+    console.error('   RSA_PRIVATE_KEY=<clave_privada_generada>');
     console.error('');
     console.error('3. Reinicia el servidor.');
     console.error('');
@@ -58,18 +63,22 @@ if (!MASTER_KEY_HEX) {
     process.exit(1);
 }
 
-// Inicializar el sistema de Key Wrapping
+// Convertir las claves de formato de una línea a formato PEM
+const RSA_PUBLIC_KEY = RSA_PUBLIC_KEY_ENV.replace(/\\n/g, '\n');
+const RSA_PRIVATE_KEY = RSA_PRIVATE_KEY_ENV.replace(/\\n/g, '\n');
+
+// Inicializar el sistema de Key Wrapping con RSA
 try {
-    initializeMasterKey(MASTER_KEY_HEX);
+    initializeRSAKeys(RSA_PUBLIC_KEY, RSA_PRIVATE_KEY);
 } catch (err) {
     console.error('');
     console.error('═'.repeat(70));
-    console.error('ERROR AL INICIALIZAR KEY WRAPPING');
+    console.error('ERROR AL INICIALIZAR KEY WRAPPING CON RSA');
     console.error('═'.repeat(70));
     console.error('');
     console.error(err.message);
     console.error('');
-    console.error('Verifica que la MASTER_KEY en .env sea válida.');
+    console.error('Verifica que las claves RSA en .env sean válidas.');
     console.error('');
     console.error('═'.repeat(70));
     console.error('');
@@ -152,9 +161,26 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 // -------------------------------------------------------
 
+// --- Configuración de CORS ---
+const ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'https://semigovernmentally-trichromatic-stephnie.ngrok-free.dev'
+];
 
-// --- Middlewares ---
-app.use(cors());
+app.use(cors({
+    origin: function (origin, callback) {
+        // Permitir solicitudes sin origin (como herramientas de desarrollo)
+        if (!origin) return callback(null, true);
+        
+        if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.log('Origen bloqueado por CORS:', origin);
+            callback(new Error('No permitido por CORS'));
+        }
+    },
+    credentials: true
+}));
 app.use(express.json());
 
 // Backend - Punto 3: Middleware de Seguridad (verifyToken)
@@ -305,16 +331,16 @@ async function main() {
             // Devuelve los datos necesarios y, crucialmente, BORRA el archivo de temp/.
             const cryptoResult = await encryptVideo(tempFileName);
             
-            // cryptoResult contiene las llaves ENVUELTAS con Key Wrapping:
-            // { encryptedFilename, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex }
+            // cryptoResult contiene las llaves ENVUELTAS con RSA-OAEP en Base64:
+            // { encryptedFilename, wrappedKeyBase64, wrappedHeaderBase64 }
             console.log(`[Crypto] Cifrado exitoso. Nuevo archivo: ${cryptoResult.encryptedFilename}`);
 
 
             // --- PASO 3 (NUEVO): Guardar las llaves ENVUELTAS en la BD ---
-            // Las llaves están protegidas con Key Wrapping. Sin la Master Key, son inútiles.
+            // Las llaves están protegidas con RSA-OAEP. Sin la clave privada RSA, son inútiles.
             await db.run(
-                'INSERT INTO video_keys (video_id, wrapped_key_hex, key_wrap_nonce_hex, wrapped_header_hex, header_wrap_nonce_hex) VALUES (?, ?, ?, ?, ?)',
-                [videoId, cryptoResult.wrappedKeyHex, cryptoResult.keyWrapNonceHex, cryptoResult.wrappedHeaderHex, cryptoResult.headerWrapNonceHex]
+                'INSERT INTO video_keys (video_id, wrapped_key_hex, wrapped_header_hex) VALUES (?, ?, ?)',
+                [videoId, cryptoResult.wrappedKeyBase64, cryptoResult.wrappedHeaderBase64]
             );
             console.log(`[DB] Llaves envueltas guardadas seguramente para video ID ${videoId}.`);
 
@@ -671,7 +697,7 @@ async function main() {
 
             // Si no existe, generarlo
             const { generateThumbnail } = require('./cryptoService.js');
-            const keyRow = await db.get('SELECT wrapped_key_hex, key_wrap_nonce_hex, wrapped_header_hex, header_wrap_nonce_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
             
             if (!keyRow) {
                 return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
@@ -687,7 +713,7 @@ async function main() {
                 return res.status(403).json({ error: "Acceso denegado." });
             }
             
-            await generateThumbnail(normalizedEncPath, keyRow.wrapped_key_hex, keyRow.key_wrap_nonce_hex, keyRow.wrapped_header_hex, keyRow.header_wrap_nonce_hex, thumbnailPath);
+            await generateThumbnail(normalizedEncPath, keyRow.wrapped_key_hex, keyRow.wrapped_header_hex, thumbnailPath);
             
             console.log(`[GET /thumbnail/${videoId}] Thumbnail generado exitosamente.`);
             res.sendFile(thumbnailPath);
@@ -943,16 +969,14 @@ async function main() {
                 return res.status(403).json({ error: 'No tienes permiso para obtener la clave de este video.' });
             }
 
-            const keyRow = await db.get('SELECT wrapped_key_hex, key_wrap_nonce_hex, wrapped_header_hex, header_wrap_nonce_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
             if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
 
-            // NOTA: Estas llaves están envueltas. Sin la Master Key (que solo existe en el servidor),
-            // son completamente inútiles para el cliente.
+            // NOTA: Estas llaves están envueltas con RSA-OAEP en Base64. Sin la clave privada RSA
+            // (que solo existe en el servidor), son completamente inútiles para el cliente.
             res.json({ 
-                wrappedKey: keyRow.wrapped_key_hex, 
-                keyWrapNonce: keyRow.key_wrap_nonce_hex,
-                wrappedHeader: keyRow.wrapped_header_hex,
-                headerWrapNonce: keyRow.header_wrap_nonce_hex
+                wrappedKeyBase64: keyRow.wrapped_key_hex, 
+                wrappedHeaderBase64: keyRow.wrapped_header_hex
             });
         } catch (err) {
             console.error('[GET /get-key] Error:', err);
@@ -1020,13 +1044,13 @@ async function main() {
             
             if (!fs.existsSync(normalizedPath)) return res.status(404).json({ error: 'Archivo cifrado no encontrado en servidor' });
 
-            // Obtener llaves ENVUELTAS y desenvolverlas en el servidor
-            const keyRow = await db.get('SELECT wrapped_key_hex, key_wrap_nonce_hex, wrapped_header_hex, header_wrap_nonce_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            // Obtener llaves ENVUELTAS con RSA-OAEP y desenvolverlas en el servidor
+            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
             if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
 
-            // Crear stream descifrado y enviarlo (las llaves se desenvuelven automáticamente en createDecryptStream)
+            // Crear stream descifrado y enviarlo (las llaves se desenvuelven automáticamente en createDecryptStream con RSA-OAEP)
             const { createDecryptStream } = require('./cryptoService.js');
-            const decryptStream = createDecryptStream(normalizedPath, keyRow.wrapped_key_hex, keyRow.key_wrap_nonce_hex, keyRow.wrapped_header_hex, keyRow.header_wrap_nonce_hex);
+            const decryptStream = createDecryptStream(normalizedPath, keyRow.wrapped_key_hex, keyRow.wrapped_header_hex);
 
             res.writeHead(200, {
                 'Content-Type': 'video/mp4',

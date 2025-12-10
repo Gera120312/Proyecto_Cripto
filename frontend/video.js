@@ -21,11 +21,11 @@ document.addEventListener('DOMContentLoaded', () => {
         history.replaceState({ videoId: id, videoTitle: title, videoFilename: filename }, '', 'video.html');
     }
     
-    videoPlayer.src = `http://localhost:3000/play/${id}?token=${encodeURIComponent(token)}`;
+    videoPlayer.src = `${API_URL}/play/${id}?token=${encodeURIComponent(token)}`;
     videoTitle.textContent = title;
 
     // Fetch full video details including author and description
-    fetch(`http://localhost:3000/videos/${id}`, {
+    fetch(`${API_URL}/videos/${id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
     })
         .then(response => {
@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
     // Load videos the user has access to
-    fetch('http://localhost:3000/videos', {
+    fetch(`${API_URL}/videos`, {
         headers: { 'Authorization': `Bearer ${token}` }
     })
         .then(response => {
@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
             accessibleVideos.forEach(video => {
                 const li = document.createElement('li');
                 const token = localStorage.getItem('jwt') || localStorage.getItem('jwtToken');
-                const thumbnailUrl = `http://localhost:3000/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
+                const thumbnailUrl = `${API_URL}/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
                 const placeholderUrl = `https://placehold.co/320x180/1f2937/7dd3fc?text=${encodeURIComponent(video.title)}`;
                 
                 li.innerHTML = `
@@ -107,11 +107,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Función para cargar el contenido del video sin recargar la página
     function loadVideoContent(videoId, newVideoTitle, encryptedFilename, token) {
         // Actualizar el reproductor
-        videoPlayer.src = `http://localhost:3000/play/${videoId}?token=${encodeURIComponent(token)}`;
+        videoPlayer.src = `${API_URL}/play/${videoId}?token=${encodeURIComponent(token)}`;
         videoTitle.textContent = newVideoTitle;
         
         // Cargar detalles del video
-        fetch(`http://localhost:3000/videos/${videoId}`, {
+        fetch(`${API_URL}/videos/${videoId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
         })
             .then(response => {
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!token) return;
         
         try {
-            const response = await fetch('http://localhost:3000/requests/managed', {
+            const response = await fetch(`${API_URL}/requests/managed`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             

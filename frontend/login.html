@@ -66,6 +66,8 @@
 
 </div>
 
+<!-- Configuración centralizada de la API -->
+<script src="config.js"></script>
 <script>
     // Comprobar si hay mensaje de registro persistente
     const savedRegMsg = localStorage.getItem('registrationMessage');
@@ -162,7 +164,7 @@
                 return;
             }
             try {
-                const res = await fetch("http://localhost:3000/register", {
+                const res = await fetch(`${API_URL}/register`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ username, password })
@@ -216,7 +218,7 @@
         // --- MODO LOGIN ---
         if (mode === "login") {
             try {
-                const res = await fetch("http://localhost:3000/login", {
+                const res = await fetch(`${API_URL}/login`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ username, password })

@@ -441,7 +441,7 @@ function startApp() {
                     const token = localStorage.getItem('jwt');
 
                     console.log('[debug] about to fetch /upload');
-                    const res = await fetch('http://localhost:3000/upload', {
+                    const res = await fetch(`${API_URL}/upload`, {
                         method: 'POST',
                         headers: {
                             // No establecer Content-Type: el navegador lo hará automáticamente para FormData
@@ -588,7 +588,7 @@ function startApp() {
                 try {
                     const token = localStorage.getItem('jwt');
                     if (!token) return;
-                    const res = await fetch('http://localhost:3000/requests/mine', {
+                    const res = await fetch(`${API_URL}/requests/mine`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
                     if (!res.ok) return; // no forzamos nada si falla
@@ -701,7 +701,7 @@ function startApp() {
                 if (requestsListContainer) requestsListContainer.innerHTML = '<p class="text-center text-gray-400">Cargando solicitudes...</p>';
 
                 try {
-                    const response = await fetch('http://localhost:3000/requests/managed', {
+                    const response = await fetch(`${API_URL}/requests/managed`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
 
@@ -772,7 +772,7 @@ function startApp() {
                 if (modifyVideosListContainer) modifyVideosListContainer.innerHTML = '<p class="text-center text-gray-400 col-span-full">Cargando tus videos...</p>';
 
                 try {
-                    const response = await fetch('http://localhost:3000/videos', {
+                    const response = await fetch(`${API_URL}/videos`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
 
@@ -799,7 +799,7 @@ function startApp() {
                         
                         // Crear imagen de thumbnail
                         const token = localStorage.getItem('jwt');
-                        const thumbnailUrl = `http://localhost:3000/thumbnail/${video.id}?token=${encodeURIComponent(token)}`;
+                        const thumbnailUrl = `${API_URL}/thumbnail/${video.id}?token=${encodeURIComponent(token)}`;
                         const placeholderUrl = `https://placehold.co/600x400/1f2937/7dd3fc?text=${encodeURIComponent(video.title)}`;
                         
                         // Escapar el título y descripción para evitar problemas con comillas
@@ -881,7 +881,7 @@ function startApp() {
 
                     try {
                         const token = localStorage.getItem('jwt');
-                        const response = await fetch(`http://localhost:3000/videos/${videoId}`, {
+                        const response = await fetch(`${API_URL}/videos/${videoId}`, {
                             method: 'PUT',
                             headers: {
                                 'Authorization': `Bearer ${token}`,
@@ -915,7 +915,7 @@ function startApp() {
 
                 try {
                     const token = localStorage.getItem('jwt');
-                    const response = await fetch(`http://localhost:3000/videos/${videoId}`, {
+                    const response = await fetch(`${API_URL}/videos/${videoId}`, {
                         method: 'DELETE',
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
@@ -939,7 +939,7 @@ function startApp() {
                     const token = localStorage.getItem('jwt');
                     
                     // Obtener lista de espectadores (usuarios con permiso)
-                    const response = await fetch(`http://localhost:3000/videos/${videoId}/viewers`, {
+                    const response = await fetch(`${API_URL}/videos/${videoId}/viewers`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
 
@@ -1010,7 +1010,7 @@ function startApp() {
 
                 try {
                     const token = localStorage.getItem('jwt');
-                    const response = await fetch(`http://localhost:3000/videos/${videoId}/viewers/${userId}`, {
+                    const response = await fetch(`${API_URL}/videos/${videoId}/viewers/${userId}`, {
                         method: 'DELETE',
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
@@ -1050,7 +1050,7 @@ function startApp() {
                 if (!token) return;
                 
                 try {
-                    const response = await fetch('http://localhost:3000/requests/managed', {
+                    const response = await fetch(`${API_URL}/requests/managed`, {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
                     
@@ -1273,7 +1273,7 @@ function startApp() {
                 if (!ok) return;
 
                 try {
-                    const response = await fetch(`http://localhost:3000/requests/${requestId}`, {
+                    const response = await fetch(`${API_URL}/requests/${requestId}`, {
                         method: 'PUT',
                         headers: {
                             'Authorization': `Bearer ${token}`,
@@ -1316,7 +1316,7 @@ function startApp() {
                 }
 
                 try {
-                    const response = await fetch('http://localhost:3000/requests', {
+                    const response = await fetch(`${API_URL}/requests`, {
                         method: 'POST',
                         headers: {
                             'Authorization': `Bearer ${token}`,
@@ -1465,7 +1465,7 @@ function startApp() {
             async function loadVideos() {
                 try {
                     const token = localStorage.getItem('jwt');
-                    const res = await fetch('http://localhost:3000/videos', {
+                    const res = await fetch(`${API_URL}/videos`, {
                         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
                     });
                     if (!res.ok) {
@@ -1536,7 +1536,7 @@ function startApp() {
                         
                         if (hasAccess && token) {
                             try {
-                                thumbnailUrl = `http://localhost:3000/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
+                                thumbnailUrl = `${API_URL}/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
                             } catch (e) {
                                 console.warn('Error generando URL de thumbnail:', e);
                                 thumbnailUrl = placeholderUrl;

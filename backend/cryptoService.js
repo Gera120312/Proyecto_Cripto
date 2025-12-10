@@ -1,95 +1,98 @@
 const sodium = require('sodium-native');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 
 // ═══════════════════════════════════════════════════════════════════
-// KEY WRAPPING CON XSalsa20-Poly1305
+// KEY WRAPPING CON RSA-OAEP
 // ═══════════════════════════════════════════════════════════════════
 // Para proteger las llaves de los videos en la base de datos, usamos
-// un mecanismo de "key wrapping" (envoltura de llaves).
+// un mecanismo de "key wrapping" (envoltura de llaves) con RSA-OAEP.
 // 
 // Flujo de seguridad:
 // 1. Se genera una llave única para cada video (Video Key)
-// 2. La Video Key se ENVUELVE con una Master Key usando XSalsa20-Poly1305
-// 3. Solo la llave envuelta se guarda en la BD (inútil sin la Master Key)
-// 4. La Master Key NUNCA se almacena en la BD, solo en variables de entorno
+// 2. La Video Key se ENVUELVE con una clave pública RSA usando RSA-OAEP
+// 3. Solo la llave envuelta se guarda en la BD (solo puede descifrarse con la clave privada)
+// 4. La clave privada RSA NUNCA se almacena en la BD, solo en variables de entorno
 // 
 // Beneficio: Incluso si un atacante compromete la BD, las llaves están
-//           cifradas y son inútiles sin la Master Key.
+//           cifradas y son inútiles sin la clave privada RSA.
 // ═══════════════════════════════════════════════════════════════════
 
-let MASTER_KEY = null;
+let RSA_PUBLIC_KEY = null;
+let RSA_PRIVATE_KEY = null;
 
 /**
- * Inicializa la llave maestra desde una variable de entorno
+ * Inicializa las claves RSA desde variables de entorno
  * Esta función DEBE llamarse al inicio de la aplicación
  */
-function initializeMasterKey(masterKeyHex) {
-    if (!masterKeyHex) {
-        throw new Error('MASTER_KEY no está definida. Ejecuta generate-master-key.js');
+function initializeRSAKeys(publicKeyPEM, privateKeyPEM) {
+    if (!publicKeyPEM || !privateKeyPEM) {
+        throw new Error('Claves RSA no están definidas. Ejecuta generate-rsa-keys.js');
     }
     
-    MASTER_KEY = Buffer.from(masterKeyHex, 'hex');
+    RSA_PUBLIC_KEY = publicKeyPEM;
+    RSA_PRIVATE_KEY = privateKeyPEM;
     
-    // Validar que la llave tenga el tamaño correcto (32 bytes para XSalsa20-Poly1305)
-    if (MASTER_KEY.length !== sodium.crypto_secretbox_KEYBYTES) {
-        throw new Error(`MASTER_KEY debe tener ${sodium.crypto_secretbox_KEYBYTES} bytes (${sodium.crypto_secretbox_KEYBYTES * 2} caracteres hex)`);
-    }
-    
-    console.log('✓ Master Key cargada exitosamente para Key Wrapping.');
+    console.log('✓ Claves RSA cargadas exitosamente para Key Wrapping.');
 }
 
 /**
- * Envuelve (cifra) una llave de video usando la Master Key
- * Usa XSalsa20-Poly1305 (crypto_secretbox) para el cifrado autenticado
+ * Envuelve (cifra) una llave de video usando RSA-OAEP
+ * Usa RSA con padding OAEP (SHA-256) para el cifrado
  * 
  * @param {Buffer} videoKey - La llave del video a proteger
- * @returns {Object} { wrappedKeyHex, nonceHex } - Llave envuelta y nonce en hexadecimal
+ * @returns {Object} { wrappedKeyBase64 } - Llave envuelta en Base64
  */
 function wrapKey(videoKey) {
-    if (!MASTER_KEY) {
-        throw new Error('Master Key no inicializada. Llama a initializeMasterKey() primero.');
+    if (!RSA_PUBLIC_KEY) {
+        throw new Error('Clave pública RSA no inicializada. Llama a initializeRSAKeys() primero.');
     }
     
-    // Generar un nonce aleatorio único para este wrap
-    const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
-    sodium.randombytes_buf(nonce);
-    
-    // Cifrar la llave del video con la Master Key
-    const wrappedKey = Buffer.alloc(videoKey.length + sodium.crypto_secretbox_MACBYTES);
-    sodium.crypto_secretbox_easy(wrappedKey, videoKey, nonce, MASTER_KEY);
+    // Cifrar la llave del video con RSA-OAEP
+    const wrappedKey = crypto.publicEncrypt(
+        {
+            key: RSA_PUBLIC_KEY,
+            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: 'sha256'
+        },
+        videoKey
+    );
     
     return {
-        wrappedKeyHex: wrappedKey.toString('hex'),
-        nonceHex: nonce.toString('hex')
+        wrappedKeyBase64: wrappedKey.toString('base64')
     };
 }
 
 /**
- * Desenvuelve (descifra) una llave de video usando la Master Key
+ * Desenvuelve (descifra) una llave de video usando RSA-OAEP
  * 
- * @param {string} wrappedKeyHex - La llave envuelta en hexadecimal
- * @param {string} nonceHex - El nonce usado para envolver, en hexadecimal
+ * @param {string} wrappedKeyBase64 - La llave envuelta en Base64
  * @returns {Buffer} - La llave de video original
  */
-function unwrapKey(wrappedKeyHex, nonceHex) {
-    if (!MASTER_KEY) {
-        throw new Error('Master Key no inicializada. Llama a initializeMasterKey() primero.');
+function unwrapKey(wrappedKeyBase64) {
+    if (!RSA_PRIVATE_KEY) {
+        throw new Error('Clave privada RSA no inicializada. Llama a initializeRSAKeys() primero.');
     }
     
-    const wrappedKey = Buffer.from(wrappedKeyHex, 'hex');
-    const nonce = Buffer.from(nonceHex, 'hex');
+    const wrappedKey = Buffer.from(wrappedKeyBase64, 'base64');
     
-    // Descifrar la llave del video
-    const videoKey = Buffer.alloc(wrappedKey.length - sodium.crypto_secretbox_MACBYTES);
-    const success = sodium.crypto_secretbox_open_easy(videoKey, wrappedKey, nonce, MASTER_KEY);
-    
-    if (!success) {
-        throw new Error('Fallo al desenvolver la llave. Master Key incorrecta o datos corruptos.');
+    // Descifrar la llave del video con RSA-OAEP
+    try {
+        const videoKey = crypto.privateDecrypt(
+            {
+                key: RSA_PRIVATE_KEY,
+                padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+                oaepHash: 'sha256'
+            },
+            wrappedKey
+        );
+        
+        return videoKey;
+    } catch (err) {
+        throw new Error('Fallo al desenvolver la llave. Clave privada incorrecta o datos corruptos.');
     }
-    
-    return videoKey;
 }
 
 /**
@@ -161,23 +164,21 @@ async function encryptVideo(inputFilename) {
         fs.unlinkSync(inputPath);
         console.log(`[Crypto] Archivo temporal inseguro eliminado: ${inputPath}`);
 
-        // 6. ENVOLVER las llaves con Key Wrapping antes de devolverlas
+        // 6. ENVOLVER las llaves con Key Wrapping RSA-OAEP antes de devolverlas
         // Esto protege las llaves incluso si la BD es comprometida
-        console.log('[Crypto] Envolviendo llaves con Key Wrapping...');
+        console.log('[Crypto] Envolviendo llaves con RSA-OAEP...');
         const wrappedVideoKey = wrapKey(key);
         const wrappedHeader = wrapKey(header);
         
-        console.log('[Crypto] Llaves envueltas exitosamente.');
+        console.log('[Crypto] Llaves envueltas exitosamente con RSA-OAEP.');
         
-        // Devolver las llaves ENVUELTAS (inútiles sin la Master Key)
+        // Devolver las llaves ENVUELTAS (inútiles sin la clave privada RSA)
         return {
             encryptedFilename: outputFilename,
-            // Llave del video envuelta
-            wrappedKeyHex: wrappedVideoKey.wrappedKeyHex,
-            keyWrapNonceHex: wrappedVideoKey.nonceHex,
-            // Header del video envuelto
-            wrappedHeaderHex: wrappedHeader.wrappedKeyHex,
-            headerWrapNonceHex: wrappedHeader.nonceHex
+            // Llave del video envuelta en Base64 (RSA-OAEP no necesita nonce)
+            wrappedKeyBase64: wrappedVideoKey.wrappedKeyBase64,
+            // Header del video envuelto en Base64 (RSA-OAEP no necesita nonce)
+            wrappedHeaderBase64: wrappedHeader.wrappedKeyBase64
         };
 
     } catch (err) {
@@ -193,11 +194,11 @@ module.exports = { encryptVideo };
 // Crear un stream legible que descifre un archivo generado por encryptVideo (formato con header + [len(4) + ciphertext]...)
 const { Readable } = require('stream');
 
-async function* decryptGenerator(filePath, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex) {
-    // Desenvolver las llaves usando la Master Key
-    console.log('[decryptGenerator] Desenvolviendo llaves...');
-    const key = unwrapKey(wrappedKeyHex, keyWrapNonceHex);
-    const header = unwrapKey(wrappedHeaderHex, headerWrapNonceHex);
+async function* decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64) {
+    // Desenvolver las llaves usando RSA-OAEP
+    console.log('[decryptGenerator] Desenvolviendo llaves con RSA-OAEP...');
+    const key = unwrapKey(wrappedKeyBase64);
+    const header = unwrapKey(wrappedHeaderBase64);
 
     const state = Buffer.alloc(sodium.crypto_secretstream_xchacha20poly1305_STATEBYTES);
     sodium.crypto_secretstream_xchacha20poly1305_init_pull(state, header, key);
@@ -291,18 +292,19 @@ async function* decryptGenerator(filePath, wrappedKeyHex, keyWrapNonceHex, wrapp
     }
 }
 
-function createDecryptStream(filePath, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex) {
-    const gen = decryptGenerator(filePath, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex);
+function createDecryptStream(filePath, wrappedKeyBase64, wrappedHeaderBase64) {
+    const gen = decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64);
     return Readable.from(gen);
 }
 
 module.exports.createDecryptStream = createDecryptStream;
+module.exports.initializeRSAKeys = initializeRSAKeys;
 
 /**
  * Genera un thumbnail de un video cifrado
  * Descifra el video a un archivo temporal, extrae un frame con ffmpeg, y elimina el temporal
  */
-async function generateThumbnail(encryptedPath, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex, outputPath) {
+async function generateThumbnail(encryptedPath, wrappedKeyBase64, wrappedHeaderBase64, outputPath) {
     const { spawn } = require('child_process');
     const tempDir = path.join(__dirname, 'uploads', 'temp');
     fs.mkdirSync(tempDir, { recursive: true });
@@ -312,8 +314,8 @@ async function generateThumbnail(encryptedPath, wrappedKeyHex, keyWrapNonceHex, 
     try {
         console.log('[Thumbnail] Descifrando video temporal...');
         
-        // Descifrar el video a un archivo temporal (con llaves envueltas)
-        const decryptStream = createDecryptStream(encryptedPath, wrappedKeyHex, keyWrapNonceHex, wrappedHeaderHex, headerWrapNonceHex);
+        // Descifrar el video a un archivo temporal (con llaves envueltas RSA)
+        const decryptStream = createDecryptStream(encryptedPath, wrappedKeyBase64, wrappedHeaderBase64);
         const tempWriteStream = fs.createWriteStream(tempVideoPath);
         
         await pipeline(decryptStream, tempWriteStream);
@@ -364,6 +366,5 @@ async function generateThumbnail(encryptedPath, wrappedKeyHex, keyWrapNonceHex, 
 }
 
 module.exports.generateThumbnail = generateThumbnail;
-module.exports.initializeMasterKey = initializeMasterKey;
 module.exports.wrapKey = wrapKey;
 module.exports.unwrapKey = unwrapKey;

@@ -99,6 +99,8 @@
         </div>
     </div>
 
+    <!-- Configuración centralizada de la API -->
+    <script src="config.js"></script>
     <script src="video.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
@@ -165,7 +167,7 @@
             // Cargar todos los videos para las sugerencias de búsqueda
             const token = localStorage.getItem('jwt') || localStorage.getItem('jwtToken');
             if (token) {
-                fetch('http://localhost:3000/videos', {
+                fetch(`${API_URL}/videos`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 })
                 .then(response => {

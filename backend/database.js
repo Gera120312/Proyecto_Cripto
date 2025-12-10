@@ -37,28 +37,24 @@ async function initializeDatabase() {
         `);
         console.log("- Tabla 'videos' lista.");
 
-        // 3. Tabla de LLAVES DE VIDEO (CON KEY WRAPPING)
+        // 3. Tabla de LLAVES DE VIDEO (CON KEY WRAPPING RSA-OAEP)
         // Almacena las llaves de cifrado de los videos ENVUELTAS (cifradas)
-        // con la Master Key usando XSalsa20-Poly1305.
+        // con RSA-OAEP usando la clave pública RSA.
         //
         // Campos:
-        //   - wrapped_key_hex: Llave del video envuelta (cifrada con Master Key)
-        //   - key_wrap_nonce_hex: Nonce usado para envolver la llave del video
-        //   - wrapped_header_hex: Header del video envuelto (cifrado con Master Key)
-        //   - header_wrap_nonce_hex: Nonce usado para envolver el header
+        //   - wrapped_key_hex: Llave del video envuelta (cifrada con clave pública RSA)
+        //   - wrapped_header_hex: Header del video envuelto (cifrado con clave pública RSA)
         //
-        // IMPORTANTE: Las llaves están protegidas. Sin la Master Key, son inútiles.
+        // IMPORTANTE: Las llaves están protegidas con RSA-OAEP. Sin la clave privada RSA, son inútiles.
         await db.exec(`
             CREATE TABLE IF NOT EXISTS video_keys (
                 video_id INTEGER PRIMARY KEY,
                 wrapped_key_hex TEXT NOT NULL,
-                key_wrap_nonce_hex TEXT NOT NULL,
                 wrapped_header_hex TEXT NOT NULL,
-                header_wrap_nonce_hex TEXT NOT NULL,
                 FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
             )
         `);
-        console.log("- Tabla 'video_keys' lista (con Key Wrapping).");
+        console.log("- Tabla 'video_keys' lista (con Key Wrapping RSA-OAEP).");
 
         // 4. Tabla de PERMISOS
         await db.exec(`
