@@ -42,15 +42,15 @@ async function initializeDatabase() {
         // con RSA-OAEP usando la clave pública RSA.
         //
         // Campos:
-        //   - wrapped_key_hex: Llave del video envuelta (cifrada con clave pública RSA)
-        //   - wrapped_header_hex: Header del video envuelto (cifrado con clave pública RSA)
+        //   - wrapped_key_base64: Llave del video envuelta en Base64 (cifrada con clave pública RSA)
+        //   - wrapped_header_base64: Header del video envuelto en Base64 (cifrado con clave pública RSA)
         //
         // IMPORTANTE: Las llaves están protegidas con RSA-OAEP. Sin la clave privada RSA, son inútiles.
         await db.exec(`
             CREATE TABLE IF NOT EXISTS video_keys (
                 video_id INTEGER PRIMARY KEY,
-                wrapped_key_hex TEXT NOT NULL,
-                wrapped_header_hex TEXT NOT NULL,
+                wrapped_key_base64 TEXT NOT NULL,
+                wrapped_header_base64 TEXT NOT NULL,
                 FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
             )
         `);

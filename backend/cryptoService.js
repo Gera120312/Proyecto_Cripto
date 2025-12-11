@@ -160,11 +160,20 @@ async function encryptVideo(inputFilename) {
         
         console.log(`[Crypto] Cifrado completado: ${outputFilename}`);
 
-        // 5. LIMPIEZA CRÍTICA: Borrar el archivo original inseguro de temp/
+        // 5. Convertir el archivo cifrado a Base64
+        console.log(`[Crypto] Convirtiendo archivo cifrado a Base64...`);
+        const encryptedBuffer = fs.readFileSync(outputPath);
+        const base64Content = encryptedBuffer.toString('base64');
+        
+        // Sobrescribir el archivo con el contenido en Base64
+        fs.writeFileSync(outputPath, base64Content, 'utf-8');
+        console.log(`[Crypto] Archivo cifrado convertido a Base64 exitosamente.`);
+
+        // 6. LIMPIEZA CRÍTICA: Borrar el archivo original inseguro de temp/
         fs.unlinkSync(inputPath);
         console.log(`[Crypto] Archivo temporal inseguro eliminado: ${inputPath}`);
 
-        // 6. ENVOLVER las llaves con Key Wrapping RSA-OAEP antes de devolverlas
+        // 7. ENVOLVER las llaves con Key Wrapping RSA-OAEP antes de devolverlas
         // Esto protege las llaves incluso si la BD es comprometida
         console.log('[Crypto] Envolviendo llaves con RSA-OAEP...');
         const wrappedVideoKey = wrapKey(key);
@@ -203,21 +212,23 @@ async function* decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64
     const state = Buffer.alloc(sodium.crypto_secretstream_xchacha20poly1305_STATEBYTES);
     sodium.crypto_secretstream_xchacha20poly1305_init_pull(state, header, key);
 
-    const fd = fs.openSync(filePath, 'r');
+    // Leer el archivo cifrado en Base64 y convertirlo a binario
+    console.log('[decryptGenerator] Leyendo archivo cifrado en Base64...');
+    const base64Content = fs.readFileSync(filePath, 'utf-8');
+    const binaryBuffer = Buffer.from(base64Content, 'base64');
+
     try {
         const headerSize = sodium.crypto_secretstream_xchacha20poly1305_HEADERBYTES;
         let offset = headerSize;
 
-        const stat = fs.fstatSync(fd);
-        const fileSize = stat.size;
+        const fileSize = binaryBuffer.length;
 
         // Detectar formato: intentar leer 4 bytes como length prefix
         // Si el valor parece razonable (menor que fileSize y mayor que ABYTES), asumimos nuevo formato
         // Si no, usamos formato legacy (sin prefijos)
         let hasLengthPrefix = false;
         if (offset + 4 <= fileSize) {
-            const testBuf = Buffer.alloc(4);
-            fs.readSync(fd, testBuf, 0, 4, offset);
+            const testBuf = binaryBuffer.slice(offset, offset + 4);
             const testLen = testBuf.readUInt32BE(0);
             // Heurística: si el valor es razonable (no cero, menor que tamaño de archivo restante)
             // asumimos formato con length-prefix
@@ -231,13 +242,11 @@ async function* decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64
             // NUEVO FORMATO: con prefijos de longitud
             console.log('[decryptGenerator] Detectado formato con length-prefix');
             while (offset < fileSize) {
-                const lenBuf = Buffer.alloc(4);
-                fs.readSync(fd, lenBuf, 0, 4, offset);
+                const lenBuf = binaryBuffer.slice(offset, offset + 4);
                 offset += 4;
                 const chunkLen = lenBuf.readUInt32BE(0);
 
-                const cipherBuf = Buffer.alloc(chunkLen);
-                fs.readSync(fd, cipherBuf, 0, chunkLen, offset);
+                const cipherBuf = binaryBuffer.slice(offset, offset + chunkLen);
                 offset += chunkLen;
 
                 const outMax = Math.max(0, cipherBuf.length - sodium.crypto_secretstream_xchacha20poly1305_ABYTES);
@@ -263,8 +272,7 @@ async function* decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64
                 const remaining = fileSize - offset;
                 const toRead = Math.min(cipherChunkSize, remaining);
                 
-                const cipherBuf = Buffer.alloc(toRead);
-                fs.readSync(fd, cipherBuf, 0, toRead, offset);
+                const cipherBuf = binaryBuffer.slice(offset, offset + toRead);
                 offset += toRead;
 
                 const outMax = Math.max(0, cipherBuf.length - sodium.crypto_secretstream_xchacha20poly1305_ABYTES);
@@ -288,7 +296,7 @@ async function* decryptGenerator(filePath, wrappedKeyBase64, wrappedHeaderBase64
         }
 
     } finally {
-        try { fs.closeSync(fd); } catch (e) {}
+        // No necesitamos cerrar fd ya que no estamos usando file descriptor
     }
 }
 

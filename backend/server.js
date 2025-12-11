@@ -339,7 +339,7 @@ async function main() {
             // --- PASO 3 (NUEVO): Guardar las llaves ENVUELTAS en la BD ---
             // Las llaves están protegidas con RSA-OAEP. Sin la clave privada RSA, son inútiles.
             await db.run(
-                'INSERT INTO video_keys (video_id, wrapped_key_hex, wrapped_header_hex) VALUES (?, ?, ?)',
+                'INSERT INTO video_keys (video_id, wrapped_key_base64, wrapped_header_base64) VALUES (?, ?, ?)',
                 [videoId, cryptoResult.wrappedKeyBase64, cryptoResult.wrappedHeaderBase64]
             );
             console.log(`[DB] Llaves envueltas guardadas seguramente para video ID ${videoId}.`);
@@ -614,6 +614,18 @@ async function main() {
                 console.log(`[DELETE /videos/${videoId}] Archivo físico eliminado: ${video.filename}`);
             }
 
+            // Eliminar el thumbnail asociado
+            const thumbnailDir = path.join(__dirname, 'uploads', 'thumbnails');
+            const thumbnailFilename = `thumb_${videoId}.jpg`;
+            const thumbnailPath = path.join(thumbnailDir, thumbnailFilename);
+            const normalizedThumbnailPath = path.normalize(thumbnailPath);
+            
+            // SEGURIDAD: Verificar que la ruta del thumbnail esté dentro del directorio permitido
+            if (normalizedThumbnailPath.startsWith(thumbnailDir) && fs.existsSync(normalizedThumbnailPath)) {
+                fs.unlinkSync(normalizedThumbnailPath);
+                console.log(`[DELETE /videos/${videoId}] Thumbnail eliminado: ${thumbnailFilename}`);
+            }
+
             // Eliminar registros relacionados en cascada
             // 1. Eliminar las llaves del video
             await db.run('DELETE FROM video_keys WHERE video_id = ?', [videoId]);
@@ -689,15 +701,22 @@ async function main() {
             
             const thumbnailFilename = `thumb_${videoId}.jpg`;
             const thumbnailPath = path.join(thumbnailDir, thumbnailFilename);
+            const normalizedThumbnailPath = path.normalize(thumbnailPath);
+
+            // SEGURIDAD: Verificar que la ruta del thumbnail esté dentro del directorio permitido
+            if (!normalizedThumbnailPath.startsWith(thumbnailDir)) {
+                console.error(`[GET /thumbnail/${videoId}] Intento de path traversal en thumbnail: ${normalizedThumbnailPath}`);
+                return res.status(403).json({ error: "Acceso denegado." });
+            }
 
             // Si el thumbnail ya existe, servirlo directamente
-            if (fs.existsSync(thumbnailPath)) {
-                return res.sendFile(thumbnailPath);
+            if (fs.existsSync(normalizedThumbnailPath)) {
+                return res.sendFile(normalizedThumbnailPath);
             }
 
             // Si no existe, generarlo
             const { generateThumbnail } = require('./cryptoService.js');
-            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
             
             if (!keyRow) {
                 return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
@@ -713,10 +732,10 @@ async function main() {
                 return res.status(403).json({ error: "Acceso denegado." });
             }
             
-            await generateThumbnail(normalizedEncPath, keyRow.wrapped_key_hex, keyRow.wrapped_header_hex, thumbnailPath);
+            await generateThumbnail(normalizedEncPath, keyRow.wrapped_key_base64, keyRow.wrapped_header_base64, normalizedThumbnailPath);
             
             console.log(`[GET /thumbnail/${videoId}] Thumbnail generado exitosamente.`);
-            res.sendFile(thumbnailPath);
+            res.sendFile(normalizedThumbnailPath);
 
         } catch (err) {
             console.error(`[GET /thumbnail/${videoId}] Error:`, err.message || err);
@@ -951,7 +970,7 @@ async function main() {
     // --- NUEVO: Endpoint para entregar la clave/nonce de un video protegido ---
     // Devuelve las llaves ENVUELTAS. El cliente NO puede desenvolverlas.
     // Este endpoint está principalmente para compatibilidad, pero las llaves envueltas
-    // son inútiles en el cliente sin la Master Key (que solo existe en el servidor).
+    // son inútiles en el cliente sin la clave privada RSA (que solo existe en el servidor).
     app.get('/get-key/:videoId', verifyToken, async (req, res) => {
         const userId = req.user && req.user.id;
         const videoId = Number(req.params.videoId);
@@ -969,14 +988,14 @@ async function main() {
                 return res.status(403).json({ error: 'No tienes permiso para obtener la clave de este video.' });
             }
 
-            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
             if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
 
             // NOTA: Estas llaves están envueltas con RSA-OAEP en Base64. Sin la clave privada RSA
             // (que solo existe en el servidor), son completamente inútiles para el cliente.
             res.json({ 
-                wrappedKeyBase64: keyRow.wrapped_key_hex, 
-                wrappedHeaderBase64: keyRow.wrapped_header_hex
+                wrappedKeyBase64: keyRow.wrapped_key_base64, 
+                wrappedHeaderBase64: keyRow.wrapped_header_base64
             });
         } catch (err) {
             console.error('[GET /get-key] Error:', err);
@@ -1045,12 +1064,12 @@ async function main() {
             if (!fs.existsSync(normalizedPath)) return res.status(404).json({ error: 'Archivo cifrado no encontrado en servidor' });
 
             // Obtener llaves ENVUELTAS con RSA-OAEP y desenvolverlas en el servidor
-            const keyRow = await db.get('SELECT wrapped_key_hex, wrapped_header_hex FROM video_keys WHERE video_id = ?', [videoId]);
+            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
             if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
 
             // Crear stream descifrado y enviarlo (las llaves se desenvuelven automáticamente en createDecryptStream con RSA-OAEP)
             const { createDecryptStream } = require('./cryptoService.js');
-            const decryptStream = createDecryptStream(normalizedPath, keyRow.wrapped_key_hex, keyRow.wrapped_header_hex);
+            const decryptStream = createDecryptStream(normalizedPath, keyRow.wrapped_key_base64, keyRow.wrapped_header_base64);
 
             res.writeHead(200, {
                 'Content-Type': 'video/mp4',

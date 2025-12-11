@@ -37,12 +37,12 @@ if ! grep -q "ECDSA_PRIVATE_KEY=" .env || ! grep -q "ECDSA_PUBLIC_KEY=" .env; th
     echo ""
 fi
 
-# Verificar si la Master Key está en .env
-if ! grep -q "MASTER_KEY=" .env || grep -q "MASTER_KEY=generar_con_generate-master-key.js" .env; then
-    echo "Master Key no encontrada en .env"
-    echo "Generando Master Key..."
+# Verificar si las claves RSA están en .env
+if ! grep -q "RSA_PRIVATE_KEY=" .env || ! grep -q "RSA_PUBLIC_KEY=" .env; then
+    echo "Claves RSA no encontradas en .env"
+    echo "Generando nuevo par de claves RSA..."
     echo ""
-    node generate-master-key.js
+    node generate-rsa-keys.js
     echo ""
 fi
 
