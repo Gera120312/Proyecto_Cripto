@@ -11,7 +11,7 @@ const { encryptVideo, initializeRSAKeys } = require('./cryptoService.js');
 
 // --- 2. Configuración ---
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // ═══════════════════════════════════════════════════════════════════
 // KEY WRAPPING - CLAVES RSA
@@ -166,18 +166,19 @@ const ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'https://semigovernmentally-trichromatic-stephnie.ngrok-free.dev'
 ];
+// Permitir cualquier subdominio válido de ngrok (TLS)
+const NGROK_REGEX = /^https:\/\/[a-z0-9-]+\.ngrok(-free)?\.(app|dev)$/i;
 
 app.use(cors({
     origin: function (origin, callback) {
         // Permitir solicitudes sin origin (como herramientas de desarrollo)
         if (!origin) return callback(null, true);
-        
-        if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            console.log('Origen bloqueado por CORS:', origin);
-            callback(new Error('No permitido por CORS'));
+        // Aceptar orígenes explícitos o subdominios válidos de ngrok
+        if (ALLOWED_ORIGINS.includes(origin) || NGROK_REGEX.test(origin)) {
+            return callback(null, true);
         }
+        console.log('Origen bloqueado por CORS:', origin);
+        return callback(new Error('No permitido por CORS'));
     },
     credentials: true
 }));
