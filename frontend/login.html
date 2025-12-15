@@ -56,6 +56,17 @@
             <p id="pw-help" class="text-xs text-gray-400 mt-1">La contraseña debe tener al menos 8 caracteres, incluir una letra mayúscula y un número.</p>
         </div>
 
+        <!-- Campo de llave privada visible desde el inicio en modo login -->
+        <div id="private-key-container" class="hidden">
+            <label class="block text-sm text-gray-300 mb-1">Llave Privada (.pem)</label>
+            <input id="private-key-file" type="file" accept=".pem"
+                class="w-full text-sm text-gray-400 cursor-pointer
+                       file:mr-4 file:py-2 file:px-4
+                       file:rounded-lg file:border-0 file:font-semibold
+                       file:bg-blue-600 file:text-white
+                       hover:file:bg-blue-700 file:cursor-pointer">
+        </div>
+
         <button id="submit-btn" type="submit"
                 class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg">
             Entrar
@@ -66,8 +77,9 @@
 
 </div>
 
-<!-- Configuración centralizada de la API -->
+<!-- Configuración y Crypto E2EE -->
 <script src="config.js"></script>
+<script src="frontend.js"></script>
 <script>
     // Comprobar si hay mensaje de registro persistente
     const savedRegMsg = localStorage.getItem('registrationMessage');
@@ -87,39 +99,56 @@
             btnRegister.classList.remove("tab-active");
             submitBtn.textContent = "Entrar";
             if (pwHelp) pwHelp.style.display = 'none';
+            // Mostrar campo de llave privada en login
+            document.getElementById('private-key-container').classList.remove('hidden');
         } else {
             btnRegister.classList.add("tab-active");
             btnLogin.classList.remove("tab-active");
             submitBtn.textContent = "Registrarse";
             if (pwHelp) pwHelp.style.display = 'block';
+            // Ocultar campo de llave privada en registro
+            document.getElementById('private-key-container').classList.add('hidden');
         }
     }
 
     // Inicializar UI
     updateTabsUI();
 
-    // Si hay mensaje de registro guardado, mostrarlo (persistente)
+    // Si hay mensaje de registro guardado, mostrarlo y luego eliminarlo
     if (savedRegMsg) {
         statusMsg.textContent = savedRegMsg;
         statusMsg.className = 'text-green-400 text-center text-sm mt-3';
+        // Limpiar el mensaje de localStorage para que no persista en futuras visitas
+        localStorage.removeItem('registrationMessage');
     }
 
     // --------- CAMBIO DE TABS ---------
     btnLogin.addEventListener("click", () => {
-        console.log("Click en LOGIN - limpiando mensaje");
+        console.log("Click en LOGIN - limpiando formulario y mensaje");
         mode = "login";
         updateTabsUI();
-        // Limpiar mensajes cuando cambies a "Iniciar Sesión"
+        // Limpiar formulario completo
+        document.getElementById("username").value = "";
+        document.getElementById("password").value = "";
+        document.getElementById("private-key-file").value = "";
+        // Limpiar mensajes
         statusMsg.textContent = "";
         statusMsg.className = "";
-        // También eliminar cualquier mensaje persistente de registro
         localStorage.removeItem('registrationMessage');
     });
 
     btnRegister.addEventListener("click", () => {
-        console.log("Click en REGISTER");
+        console.log("Click en REGISTER - limpiando formulario");
         mode = "register";
         updateTabsUI();
+        // Limpiar formulario completo
+        document.getElementById("username").value = "";
+        document.getElementById("password").value = "";
+        document.getElementById("private-key-file").value = "";
+        // Limpiar mensajes
+        statusMsg.textContent = "";
+        statusMsg.className = "";
+        localStorage.removeItem('registrationMessage');
     });
 
     // --------- MANEJAR EL FORMULARIO ---------
@@ -164,50 +193,80 @@
                 return;
             }
             try {
-                const res = await fetch(`${API_URL}/register`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username, password })
+                // Generar llaves
+                const { publicKey, privateKey } = await E2EE.generateRSAKeyPair();
+                const publicKeyPem = await E2EE.exportPublicKeyPem(publicKey);
+                const privateKeyPem = await E2EE.exportPrivateKeyPem(privateKey);
+                
+                // Hashear contraseña
+                const passwordHash = await E2EE.pbkdf2Hash(password, username);
+                
+                // Registrar en el servidor
+                const resp = await fetch(`${window.API_BASE_URL || 'http://localhost:3000'}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, passwordHash, publicKeyPem })
                 });
+                
+                if (!resp.ok) throw new Error('Error en registro');
+                
+                // Función auxiliar para descargar archivo
+                const downloadFile = (content, filename, type) => {
+                    const blob = new Blob([content], { type });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                };
+                
+                // Descargar llaves inmediatamente (sin almacenar en memoria)
+                // Primero la privada (más importante)
+                downloadFile(privateKeyPem, `${username}_private.pem`, 'application/x-pem-file');
+                
+                // Pequeño delay para evitar que el navegador bloquee la segunda descarga
+                await new Promise(resolve => setTimeout(resolve, 200));
+                
+                // Luego la pública
+                downloadFile(publicKeyPem, `${username}_public.pem`, 'application/x-pem-file');
+                
+                console.log('✓ Llaves descargadas:', `${username}_private.pem`, `${username}_public.pem`);
+                
+                // Limpiar variables de llaves de la memoria inmediatamente
+                // (las variables locales se eliminarán cuando salga del scope)
+                
+                // Mostrar mensajes: éxito + advertencia crítica
+                statusMsg.innerHTML = "<span class=\"text-green-400\">✓ Llaves guardadas exitosamente.</span><br>" +
+                    "<span class=\"text-red-400\">Advertencia: Guarda tu llave privada en un lugar seguro. Si la pierdes, pierdes tu cuenta y tus videos.</span>";
+                statusMsg.className = "text-center text-sm mt-3";
+                
+                // Limpiar formulario
+                document.getElementById("username").value = "";
+                document.getElementById("password").value = "";
+                
+                // Mantener al usuario en la pestaña de registro y persistir mensaje temporalmente
+                mode = "register";
+                localStorage.setItem('registrationMessage', 'Llaves guardadas exitosamente. Guarda tu llave privada en un lugar seguro.');
+                updateTabsUI();
 
-                const data = await res.json();
-
-                if (res.ok) {
-                    console.log("REGISTRO EXITOSO - mostrando mensaje verde");
-                    // Marcar como registro exitoso
-                    isSuccessfulRegistration = true;
-                    // Mensaje a mostrar y a persistir
-                    const msg = "✓ Registro exitoso. Ahora inicia sesión.";
-                    // Mostrar mensaje verde
-                    statusMsg.textContent = msg;
-                    statusMsg.className = "text-green-400 text-center text-sm mt-3";
-                    // Persistir el mensaje para que sobreviva recargas accidentales
-                    localStorage.setItem('registrationMessage', msg);
-                    // Limpiar campos del formulario
-                    document.getElementById("username").value = "";
-                    document.getElementById("password").value = "";
-                    // Reactivar botón
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = originalBtnText;
-                } else {
-                    console.log("Error en registro:", data.error);
-                    isSuccessfulRegistration = false;
-                    // Eliminar mensaje persistente por si hay uno previo
+                // Eliminar el mensaje de registro inmediatamente después de mostrarlo
+                setTimeout(() => {
                     localStorage.removeItem('registrationMessage');
-                    statusMsg.textContent = data.error || "Error en el registro.";
-                    statusMsg.className = "text-red-400 text-center text-sm mt-3";
-                    // Reactivar botón
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = originalBtnText;
-                }
+                }, 0);
+                
+                // Reactivar botón
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+                
             } catch (err) {
                 console.log("Error de conexión:", err);
                 isSuccessfulRegistration = false;
-                // Asegurarnos de no dejar mensaje persistente en caso de fallo
                 localStorage.removeItem('registrationMessage');
                 statusMsg.textContent = "Error de conexión al registrar.";
                 statusMsg.className = "text-red-400 text-center text-sm mt-3";
-                // Reactivar botón
                 submitBtn.disabled = false;
                 submitBtn.textContent = originalBtnText;
             }
@@ -218,52 +277,44 @@
         // --- MODO LOGIN ---
         if (mode === "login") {
             try {
-                const res = await fetch(`${API_URL}/login`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username, password })
-                });
-
-                const data = await res.json();
-
-                if (res.ok) {
-                    // GUARDAMOS EL JWT (mismo nombre que usa index.html)
-                    // Guardar JWT y username para que index pueda mostrar el nombre
-                    localStorage.setItem("jwt", data.token);
-                    localStorage.setItem("username", username);
-
-                    // Limpiar campos y mensajes locales antes de redirigir
-                    document.getElementById("username").value = "";
-                    document.getElementById("password").value = "";
-                    statusMsg.textContent = "";
-                    statusMsg.className = "";
-                    // Eliminar mensaje persistente de registro (ya no es necesario)
-                    localStorage.removeItem('registrationMessage');
-
-                    // Reactivar botón antes de redirigir (opcional)
+                // Verificar que se haya cargado la llave privada
+                const pkFile = document.getElementById('private-key-file').files[0];
+                if (!pkFile) {
+                    statusMsg.textContent = 'Por favor selecciona tu archivo de llave privada (.pem)';
+                    statusMsg.className = 'text-yellow-300 text-center text-sm mt-3';
                     submitBtn.disabled = false;
                     submitBtn.textContent = originalBtnText;
-                    // REDIRIGIMOS AL INDEX (usar replace para no dejar login en el historial)
-                    // Asegurarnos de que la pestaña activa sea 'watch' después del login
-                    try { sessionStorage.setItem('activeSection', 'watch'); } catch (e) {}
-                    window.location.replace("index.html");
-                } else {
-                    statusMsg.textContent = data.error || "Credenciales incorrectas.";
-                    statusMsg.className = "text-red-400 text-center text-sm mt-3";
-                    // Reactivar botón
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = originalBtnText;
+                    return;
                 }
+                
+                const pem = await pkFile.text();
+                const nonceB64 = await E2EE.loginStart(username, password);
+                const token = await E2EE.loginFinish(username, nonceB64, pem);
+                
+                localStorage.setItem("jwt", token);
+                localStorage.setItem("username", username);
+
+                document.getElementById("username").value = "";
+                document.getElementById("password").value = "";
+                document.getElementById("private-key-file").value = "";
+                statusMsg.textContent = "";
+                statusMsg.className = "";
+                localStorage.removeItem('registrationMessage');
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+                try { sessionStorage.setItem('activeSection', 'watch'); } catch (e) {}
+                window.location.replace("index.html");
             } catch (err) {
-                statusMsg.textContent = "Error de conexión al iniciar sesión.";
+                statusMsg.textContent = "Error al iniciar sesión. Verifica tus credenciales y llave privada.";
                 statusMsg.className = "text-red-400 text-center text-sm mt-3";
-                // Reactivar botón
                 submitBtn.disabled = false;
                 submitBtn.textContent = originalBtnText;
             }
         }
     });
 </script>
+
+<!-- Scripts al final del body -->
 
 </body>
 </html>

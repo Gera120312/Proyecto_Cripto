@@ -1,74 +1,150 @@
-# 🎬 CryptoStream — Sistema de Streaming Seguro con Cifrado
+# 🎬 CryptoStream — Sistema de Streaming Zero-Trust E2EE
 
-**CryptoStream** es una plataforma de streaming de video que utiliza cifrado de extremo a extremo y autenticación robusta mediante criptografía asimétrica ECDSA.
+**CryptoStream** es una plataforma de streaming de video con arquitectura **Zero-Trust** y **End-to-End Encryption (E2EE)** usando el modelo **BYOK (Bring Your Own Key)**.
+
+**🔒 El servidor es completamente "ciego"** - NO puede descifrar videos ni llaves de usuarios.
+
+---
+
+## ✨ Características
+
+- ✅ **End-to-End Encryption** - Cifrado/descifrado client-side
+- ✅ **Zero-Knowledge Server** - Servidor no puede ver contenido
+- ✅ **BYOK** - Usuarios generan y controlan sus llaves RSA
+- ✅ **Challenge-Response Auth** - Login seguro con firma RSA-PSS
+- ✅ **Share/Revoke** - Compartir videos con control granular
+- ✅ **Crypto robusto** - RSA-2048, XChaCha20-Poly1305, PBKDF2
 
 ---
 
 ## 🚀 Inicio Rápido
 
-### 1️⃣ Clonar el Repositorio
-
-```bash
-git clone <url-del-repo>
-cd app
-```
-
-### 2️⃣ Instalar Dependencias
+### 1️⃣ Instalar Dependencias
 
 ```bash
 cd backend
 npm install
 ```
 
-### 3️⃣ Iniciar el Servidor
+### 2️⃣ Iniciar el Servidor
 
 ```bash
 ./start-server.sh
 ```
 
-El script verificará e iniciará el servidor automáticamente. Las claves ECDSA se generarán automáticamente en la primera ejecución.
+El servidor iniciará en `http://localhost:3000`
 
-### 4️⃣ Acceder a la Aplicación
+### 3️⃣ Acceder a la Aplicación
 
 Abre tu navegador en: **http://localhost:3000**
 
 ---
 
-## 🔐 Sistema de Autenticación
+## 🔐 Arquitectura Zero-Trust
 
-### Criptografía Asimétrica ECDSA
+### Backend (Servidor Ciego)
 
-CryptoStream utiliza **ECDSA (Elliptic Curve Digital Signature Algorithm)** para firmar y verificar tokens JWT, proporcionando seguridad superior a las claves simétricas tradicionales.
+El servidor **NUNCA** tiene acceso a:
+- ❌ Llaves privadas de usuarios
+- ❌ Contraseñas en texto plano
+- ❌ Llaves de cifrado de videos (VideoKeys)
+- ❌ Videos descifrados
 
-#### ¿Cómo Funciona?
+Solo almacena:
+- ✅ Videos cifrados (`.enc`)
+- ✅ Llaves públicas RSA de usuarios
+- ✅ Envelopes (VideoKeys envueltas con RSA-OAEP)
+- ✅ Hashes PBKDF2 de contraseñas
 
-- **Clave PRIVADA** (`keys/private.pem`): Usada SOLO para FIRMAR tokens JWT durante el login
-- **Clave PÚBLICA** (`keys/public.pem`): Usada para VERIFICAR la autenticidad de los tokens
+### Frontend (Client-Side Crypto)
 
-**Analogía:** 
-- La clave privada es como tu mano y bolígrafo (solo tú puedes firmar)
-- La clave pública es como una copia de tu firma en tu INE (otros pueden verificar, pero no pueden firmarla)
+Todas las operaciones criptográficas ocurren en el navegador:
+- 🔑 Generación de llaves RSA-2048
+- 🔒 Cifrado de videos (XChaCha20-Poly1305)
+- 🔓 Descifrado de videos
+- 📝 Firma RSA-PSS (challenge-response)
+- 🔐 PBKDF2 hashing
 
-#### Generación Automática de Claves
+---
 
-Al ejecutar `./start-server.sh`, el sistema:
+## 🛠️ Stack Tecnológico
 
-1. ✅ Verifica si las claves ya existen en `backend/keys/`
-2. 📦 Si no existen, las genera automáticamente usando el algoritmo ECDSA con curva P-256
-3. 🔒 Almacena las claves de forma segura con permisos restringidos
+### Criptografía
 
-**No necesitas hacer nada manualmente.** El sistema está listo para usar.
+| Algoritmo | Uso | Especificación |
+|-----------|-----|----------------|
+| **RSA-2048** | Key wrapping | RSA-OAEP (SHA-256) |
+| **RSA-PSS** | Signatures | RSA-PSS (SHA-256, salt: 32) |
+| **XChaCha20-Poly1305** | Video encryption | 24-byte nonce, 32-byte key |
+| **PBKDF2** | Password hashing | SHA-256, 100k iterations |
 
-#### Regenerar Claves Manualmente
+### Backend
+- Node.js + Express
+- SQLite (videos.db)
+### Frontend
+- libsodium-wrappers (XChaCha20-Poly1305)
+- Web Crypto API (RSA, PBKDF2)
+- HTML5 + TailwindCSS
 
-Si necesitas regenerar las claves por alguna razón:
+---
 
-```bash
-cd backend
-node generate-keys.js
-```
+## 📖 Flujos de Usuario
 
-**⚠️ Importante:** Regenerar las claves invalidará todos los tokens JWT existentes. Los usuarios deberán hacer login nuevamente.
+### 1. Registro
+
+1. Usuario ingresa `username` y `password`
+2. Frontend genera par de llaves RSA-2048
+3. **Descarga automática** de `username_private.pem` (BYOK)
+4. Hashea password con PBKDF2 (100k iterations)
+5. Envía `{ username, passwordHash, publicKeyPem }` al servidor
+
+### 2. Login (Challenge-Response)
+
+**Paso 1 - Start:**
+1. Usuario ingresa credenciales
+2. Frontend hashea password (PBKDF2)
+3. POST `/login/start` → Backend devuelve `nonce`
+
+**Paso 2 - Finish:**
+4. Usuario carga su `username_private.pem`
+5. Frontend firma nonce con RSA-PSS
+6. POST `/login/finish` → Backend verifica firma
+7. Devuelve `token` UUID
+
+### 3. Upload de Video
+
+1. Usuario selecciona archivo `.mp4`
+2. Frontend genera `VideoKey` (32 bytes random)
+3. Cifra video con XChaCha20-Poly1305
+4. Envuelve `VideoKey` con RSA-OAEP (llave pública del usuario)
+5. Envía video cifrado + envelope al servidor
+
+### 4. Reproducción
+
+1. Usuario click en video
+2. Carga su llave privada `.pem`
+3. Frontend obtiene envelope del servidor
+4. Desenvuelve `VideoKey` con RSA-OAEP
+5. Descarga stream cifrado
+6. Descifra con XChaCha20-Poly1305
+7. Reproduce en `<video>` element
+
+### 5. Compartir Video
+
+1. Dueño selecciona usuario destino
+2. Carga su llave privada
+3. Frontend:
+   - Desenvuelve `VideoKey` (con llave propia)
+   - Re-envuelve con llave pública del target
+   - Envía nuevo envelope al servidor
+4. Target puede reproducir el video
+
+### 6. Revocar Acceso
+
+1. Dueño click "Espectadores" en video
+2. Click "Revocar" junto a usuario
+3. Servidor elimina envelope y permiso
+4. Usuario revocado pierde acceso inmediatamente
 
 ---
 
@@ -77,24 +153,24 @@ node generate-keys.js
 ```
 app/
 ├── backend/
-│   ├── server.js              # Servidor principal con endpoints
-│   ├── database.js            # Configuración de SQLite
-│   ├── cryptoService.js       # Servicios de cifrado de video
-│   ├── generate-keys.js       # Script de generación de claves ECDSA
-│   ├── start-server.sh        # Script de inicio automático
-│   ├── keys/                  # 🔐 Claves ECDSA (generadas automáticamente)
-│   │   ├── private.pem        # Clave PRIVADA (NO compartir)
-│   │   └── public.pem         # Clave PÚBLICA
+│   ├── server.js              # API REST Zero-Knowledge
+│   ├── database.js            # SQLite schema (users, videos, envelopes)
+│   ├── start-server.sh        # Script de inicio
 │   ├── uploads/
-│   │   ├── encrypted/         # Videos cifrados
+│   │   ├── encrypted/         # Videos cifrados (.enc)
 │   │   ├── temp/              # Archivos temporales
-│   │   └── thumbnails/        # Miniaturas generadas
+│   │   └── thumbnails/        # Miniaturas
 │   └── package.json
 ├── frontend/
-│   ├── index.html             # Página principal
-│   ├── login.html             # Página de login
-│   ├── video.html             # Reproductor de video
-│   └── app.js                 # Lógica del frontend
+│   ├── index.html             # Dashboard principal
+│   ├── login.html             # Registro y login
+│   ├── app.js                 # Lógica de aplicación
+│   ├── frontend.js            # ⭐ Módulo E2EE (core crypto)
+│   ├── video.js               # Lógica de reproducción
+│   └── config.js              # Configuración API
+├── GUIA_USO.md               # 📘 Guía de usuario
+├── COMPARTIR_REVOCAR.md      # 📗 Documentación técnica share/revoke
+├── RESUMEN_COMPLETO.md       # 📕 Arquitectura completa
 └── README.md                  # Este archivo
 ```
 
@@ -102,182 +178,173 @@ app/
 
 ## 🔒 Seguridad
 
-### Claves y Secretos
+### Propiedades Garantizadas
 
-- ✅ Las claves ECDSA se generan **automáticamente** en la primera ejecución
-- ✅ Se almacenan en `backend/keys/` (excluido de Git mediante `.gitignore`)
-- ✅ La clave privada **NUNCA** debe salir del servidor
-- ✅ Sistema de permisos apropiados configurado automáticamente
+✅ **Zero-Knowledge Server** - Backend nunca ve VideoKeys en texto plano  
+✅ **Forward Secrecy** - Revocar elimina envelope; target no puede descifrar más  
+✅ **BYOK** - Usuario debe subir llave privada para compartir  
+✅ **No Residual Access** - Envelopes eliminados = acceso totalmente revocado  
+✅ **Cryptographic Isolation** - Cada usuario tiene envelope único  
 
 ### ¿Qué está protegido?
 
-1. **No se sube al repositorio:**
-   - `keys/` - Claves ECDSA
-   - `*.pem` - Archivos de claves
-   - `uploads/` - Videos subidos
+1. **Nunca sale del cliente:**
+   - Llaves privadas de usuarios (`.pem`)
+   - VideoKeys en texto plano
+   - Contraseñas en texto plano
+2. **No se sube al repositorio:**
+   - `uploads/` - Videos cifrados
+   - `videos.db` - Base de datos
    - `.env` - Variables de entorno
 
-2. **Protección automática:**
+3. **Protección automática:**
    - `.gitignore` configurado correctamente
    - Permisos de archivo restrictivos
-   - Tokens JWT con expiración de 1 hora
-
-### Mejores Prácticas
-
-✅ **Hacer:**
-- Mantener las claves dentro del servidor
-- Usar el script `start-server.sh` para iniciar
-- Hacer backup seguro de `keys/private.pem`
-- Revisar logs regularmente
-
-❌ **No Hacer:**
-- Subir `keys/` a Git
-- Compartir `private.pem` con nadie
-- Usar las mismas claves en múltiples proyectos
-- Loggear las claves en consola
+   - Tokens UUID con sesiones en memoria
 
 ---
 
-## 👥 Colaboración
+## 🧪 Testing
 
-### Para Colaboradores
+### Prueba Rápida del Sistema
 
-Cada colaborador debe:
+```bash
+# Terminal 1: Iniciar servidor
+cd backend
+./start-server.sh
 
-1. **Clonar el repositorio:**
-   ```bash
-   git clone <url-del-repo>
-   cd app/backend
-   ```
-
-2. **Instalar dependencias:**
-   ```bash
-   npm install
-   ```
-
-3. **Iniciar el servidor:**
-   ```bash
-   ./start-server.sh
-   ```
-
-Las claves se generarán automáticamente en tu máquina local. **No compartas tu `keys/private.pem` con nadie.**
-
-### Flujo de Trabajo Seguro
-
-```
-Desarrollador A                Desarrollador B
-    │                              │
-    ├─ Clona repo                  ├─ Clona repo
-    ├─ npm install                 ├─ npm install
-    ├─ ./start-server.sh           ├─ ./start-server.sh
-    │  (genera claves A)           │  (genera claves B)
-    ├─ Trabaja con claves A        ├─ Trabaja con claves B
-    └─ NO sube keys/ a Git         └─ NO sube keys/ a Git
+# Terminal 2: Abrir navegador
+open http://localhost:3000/
 ```
 
-Cada desarrollador tiene **sus propias claves** que son diferentes entre sí. Esto es **intencional** y **seguro**.
+### Escenario de Prueba Completo
+
+**Usuarios:** Alice (dueña) y Bob (espectador)
+
+1. **Alice se registra**
+   - Descarga `alice_private.pem`
+   
+2. **Bob se registra**
+   - Descarga `bob_private.pem`
+
+3. **Alice sube video**
+   - Carga `alice_private.pem`
+   - Selecciona `example.mp4`
+   - Video se cifra client-side
+
+4. **Alice comparte con Bob**
+   - Tab "Modificar Videos" → Click "Compartir"
+   - Selecciona "Bob", carga `alice_private.pem`
+   - VideoKey se re-cifra para Bob
+
+5. **Bob reproduce**
+   - Ve video en su lista
+   - Carga `bob_private.pem`
+   - Video se descifra client-side
+
+6. **Alice revoca acceso**
+   - Click "Espectadores" → "Revocar" junto a Bob
+   - Bob pierde acceso inmediatamente
+
+**✅ Resultado esperado:** Todos los pasos funcionan sin errores
 
 ---
 
-## 🛠️ Configuración Avanzada
+## 📚 Documentación Adicional
+
+- **[GUIA_USO.md](GUIA_USO.md)** - Guía visual para usuarios finales
+- **[COMPARTIR_REVOCAR.md](COMPARTIR_REVOCAR.md)** - Documentación técnica del sistema de permisos
+- **[RESUMEN_COMPLETO.md](RESUMEN_COMPLETO.md)** - Arquitectura completa del sistema E2EE
+
+---
+
+## 🤝 Colaboración
+
+### Para Desarrolladores
+
+```bash
+# 1. Clonar repositorio
+git clone <url>
+cd app
+
+# 2. Instalar dependencias
+cd backend
+npm install
+
+# 3. Iniciar servidor
+./start-server.sh
+
+# El servidor creará automáticamente:
+# - Base de datos SQLite (videos.db)
+# - Carpetas de uploads
+# - Tablas necesarias
+```
+
+**⚠️ Importante:** Cada desarrollador tendrá su propia base de datos local. No compartas `videos.db` entre equipos.
+
+---
+
+## ⚙️ Configuración
 
 ### Variables de Entorno (Opcional)
 
-Si deseas usar variables de entorno en lugar de archivos:
+```bash
+# backend/.env (crear si es necesario)
+PORT=3000
+API_BASE_URL=http://localhost:3000
+```
 
-1. Crea un archivo `.env` en `backend/`:
-   ```env
-   PORT=3000
-   # Otras configuraciones...
-   ```
-
-2. El archivo `.env` está excluido de Git automáticamente.
-
-### Configuración de Puerto
-
-Por defecto, el servidor corre en el puerto **3000**. Para cambiarlo:
+### Configuración Frontend
 
 ```javascript
-// En backend/server.js, línea 16
-const PORT = 3000; // Cambia a tu puerto preferido
+// frontend/config.js
+window.API_BASE_URL = 'http://localhost:3000';
 ```
 
 ---
 
-## 📖 Documentación Adicional
+## 🐛 Troubleshooting
 
-- **[SECURITY.md](backend/SECURITY.md)** - Guía completa del sistema de autenticación ECDSA
-- **[Comentarios en server.js](backend/server.js)** - Documentación detallada del código
+### Error: "No se pudo obtener sobre del video"
+**Solución:** Verifica que tienes permiso para acceder al video
 
----
+### Error: "Error al compartir"
+**Solución:** Asegúrate de cargar tu llave privada correcta (`.pem`)
 
-## 🧪 Verificación del Sistema
+### Error: libsodium no carga
+**Solución:** Verifica conexión a internet (CDN) o usa versión local
 
-### Probar el Login
-
-```bash
-curl -X POST http://localhost:3000/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test","password":"test123"}'
-```
-
-### Inspeccionar Token JWT
-
-Copia el token recibido y pégalo en [jwt.io](https://jwt.io). Deberías ver:
-
-```json
-{
-  "alg": "ES256",
-  "typ": "JWT"
-}
-```
-
-El algoritmo `ES256` confirma que estás usando ECDSA correctamente.
+### Base de datos bloqueada
+**Solución:** Cierra el servidor y reinicia: `./start-server.sh`
 
 ---
 
-## 🆘 Solución de Problemas
+## 📄 Licencia
 
-### Error: "Cannot find module 'keys/private.pem'"
-
-**Solución:** Ejecuta `node generate-keys.js` desde el directorio `backend/`:
-
-```bash
-cd backend
-node generate-keys.js
-```
-
-### Error: "EACCES: permission denied"
-
-**Solución:** Verifica los permisos del script:
-
-```bash
-chmod +x backend/start-server.sh
-```
-
-### Tokens no válidos después de reiniciar
-
-**Causa:** Si regeneraste las claves, todos los tokens antiguos son inválidos.
-
-**Solución:** Los usuarios deben hacer login nuevamente.
+Este proyecto es académico - Criptografía 2 - 7mo Semestre
 
 ---
 
-## 📞 Contacto y Soporte
+## 👨‍💻 Autor
 
-Si tienes problemas:
-
-1. Revisa la [documentación de seguridad](backend/SECURITY.md)
-2. Verifica los comentarios en `server.js`
-3. Abre un **issue** en el repositorio
+Proyecto desarrollado como demostración de arquitectura Zero-Trust E2EE
 
 ---
 
-## 🎓 Características Principales
+## 🎯 Roadmap Futuro
 
-### ✨ Autenticación
-- ✅ Registro de usuarios con hash bcrypt
-- ✅ Login con tokens JWT firmados con ECDSA
+- [ ] Streaming progresivo (chunked decryption)
+- [ ] Compartir múltiple (batch share)
+- [ ] Notificaciones en tiempo real
+- [ ] Audit log de comparticiones
+- [ ] Permisos granulares (view-only vs re-share)
+- [ ] Expiración automática de permisos
+- [ ] Thumbnails cifrados
+- [ ] 2FA con TOTP
+
+---
+
+**¡Gracias por usar CryptoStream!** 🎬🔒
 - ✅ Expiración automática de tokens (1 hora)
 - ✅ Middleware de verificación en todas las rutas protegidas
 

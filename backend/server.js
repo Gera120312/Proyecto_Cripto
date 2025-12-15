@@ -1,145 +1,20 @@
 require('dotenv').config();
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const dbPromise = require('./database.js');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { encryptVideo, initializeRSAKeys } = require('./cryptoService.js');
+const { promisify } = require('util');
 
 // --- 2. Configuración ---
 const app = express();
 const PORT = 3000;
 
-// ═══════════════════════════════════════════════════════════════════
-// KEY WRAPPING - CLAVES RSA
-// ═══════════════════════════════════════════════════════════════════
-//
-//  CLAVES RSA:
-//    - Se usan para ENVOLVER (cifrar) las llaves de los videos con RSA-OAEP
-//    - La clave pública cifra las llaves de video
-//    - La clave privada descifra las llaves de video
-//    - NUNCA deben almacenarse en la base de datos
-//    - Deben guardarse como variables de entorno o en un gestor de secretos
-//    - Si se pierde la clave privada, NO SE PODRÁN descifrar los videos
-//
-//  Flujo de seguridad:
-//    1. Video Key (generada aleatoriamente) → Cifra el video
-//    2. Clave pública RSA (de variable de entorno) → Cifra la Video Key con RSA-OAEP
-//    3. Solo la Video Key cifrada se guarda en la BD
-//
-//  Beneficio: Incluso si un atacante roba la BD, las llaves están
-//             cifradas con RSA-OAEP y son inútiles sin la clave privada RSA.
-//
-// ═══════════════════════════════════════════════════════════════════
-
-// Cargar y validar las claves RSA desde variables de entorno
-const RSA_PUBLIC_KEY_ENV = process.env.RSA_PUBLIC_KEY;
-const RSA_PRIVATE_KEY_ENV = process.env.RSA_PRIVATE_KEY;
-
-if (!RSA_PUBLIC_KEY_ENV || !RSA_PRIVATE_KEY_ENV) {
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('ERROR CRÍTICO: Claves RSA no están definidas');
-    console.error('═'.repeat(70));
-    console.error('');
-    console.error('La aplicación requiere claves RSA para proteger las llaves');
-    console.error('de los videos mediante Key Wrapping con RSA-OAEP.');
-    console.error('');
-    console.error('SOLUCIÓN:');
-    console.error('1. Ejecuta el generador de claves:');
-    console.error('   node generate-rsa-keys.js');
-    console.error('');
-    console.error('2. Verifica que el archivo .env contenga:');
-    console.error('   RSA_PUBLIC_KEY=<clave_publica_generada>');
-    console.error('   RSA_PRIVATE_KEY=<clave_privada_generada>');
-    console.error('');
-    console.error('3. Reinicia el servidor.');
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('');
-    process.exit(1);
-}
-
-// Convertir las claves de formato de una línea a formato PEM
-const RSA_PUBLIC_KEY = RSA_PUBLIC_KEY_ENV.replace(/\\n/g, '\n');
-const RSA_PRIVATE_KEY = RSA_PRIVATE_KEY_ENV.replace(/\\n/g, '\n');
-
-// Inicializar el sistema de Key Wrapping con RSA
-try {
-    initializeRSAKeys(RSA_PUBLIC_KEY, RSA_PRIVATE_KEY);
-} catch (err) {
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('ERROR AL INICIALIZAR KEY WRAPPING CON RSA');
-    console.error('═'.repeat(70));
-    console.error('');
-    console.error(err.message);
-    console.error('');
-    console.error('Verifica que las claves RSA en .env sean válidas.');
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('');
-    process.exit(1);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// CRIPTOGRAFÍA ASIMÉTRICA ECDSA PARA JWT
-// ═══════════════════════════════════════════════════════════════════
-//
-//  CLAVE PRIVADA (ECDSA_PRIVATE_KEY):
-//    - Se usa ÚNICAMENTE para FIRMAR tokens JWT
-//    - NUNCA debe salir del servidor backend
-//    - Es como tu "mano y bolígrafo" que estampa tu firma
-//    - Si alguien la roba, puede falsificar tokens
-//    - Almacenada como variable de entorno en .env
-//
-//  CLAVE PÚBLICA (ECDSA_PUBLIC_KEY):
-//    - Se usa ÚNICAMENTE para VERIFICAR tokens JWT
-//    - Puede distribuirse libremente (incluso al frontend)
-//    - Es como una fotocopia de tu firma que otros usan para validar
-//    - No sirve para crear tokens, solo para verificarlos
-//    - Almacenada como variable de entorno en .env
-//
-// Algoritmo: ES256 (ECDSA con SHA-256 y curva P-256)
-// ═══════════════════════════════════════════════════════════════════
-
-// Cargar las claves ECDSA desde variables de entorno
-const ECDSA_PRIVATE_KEY_ENV = process.env.ECDSA_PRIVATE_KEY;
-const ECDSA_PUBLIC_KEY_ENV = process.env.ECDSA_PUBLIC_KEY;
-
-if (!ECDSA_PRIVATE_KEY_ENV || !ECDSA_PUBLIC_KEY_ENV) {
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('ERROR CRÍTICO: Claves ECDSA no encontradas');
-    console.error('═'.repeat(70));
-    console.error('');
-    console.error('La aplicación requiere claves ECDSA para firmar y verificar');
-    console.error('tokens JWT.');
-    console.error('');
-    console.error('SOLUCIÓN:');
-    console.error('1. Ejecuta el generador de claves:');
-    console.error('   node generate-keys.js');
-    console.error('');
-    console.error('2. Verifica que el archivo .env contenga:');
-    console.error('   ECDSA_PRIVATE_KEY=...');
-    console.error('   ECDSA_PUBLIC_KEY=...');
-    console.error('');
-    console.error('═'.repeat(70));
-    console.error('');
-    process.exit(1);
-}
-
-// Convertir las claves de formato de una línea a formato PEM
-// (reemplazar \\n literal con saltos de línea reales)
-const PRIVATE_KEY = ECDSA_PRIVATE_KEY_ENV.replace(/\\n/g, '\n');
-const PUBLIC_KEY = ECDSA_PUBLIC_KEY_ENV.replace(/\\n/g, '\n');
-
-console.log('✓ Claves ECDSA cargadas exitosamente desde variables de entorno');
-console.log('  • Clave PRIVADA: para FIRMAR tokens');
-console.log('  • Clave PÚBLICA: para VERIFICAR tokens');
+// Zero-Trust: sin claves maestras ni JWT; sesiones por UUID
+const sessions = new Map(); // token -> { userId, username, expiresAt }
+const loginChallenges = new Map(); // username -> nonce (Buffer)
 
 // --- Configuración de Multer (Dónde guardar los archivos temporales) ---
 const storage = multer.diskStorage({
@@ -169,7 +44,7 @@ const ALLOWED_ORIGINS = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Permitir solicitudes sin origin (como herramientas de desarrollo)
+        // Permitir solicitudes sin origin (como herramientas de desarrollo o file://)
         if (!origin) return callback(null, true);
         
         if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
@@ -181,7 +56,9 @@ app.use(cors({
     },
     credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '500mb' })); // Aumentar límite para videos reencriptados
+app.use(express.urlencoded({ limit: '500mb', extended: true }));
+
 
 // Backend - Punto 3: Middleware de Seguridad (verifyToken)
 // Este middleware verifica la validez y autenticidad del token JWT.
@@ -189,108 +66,105 @@ app.use(express.json());
 // Si el token es inválido o no se proporciona, se devuelve un error 401 o 403.
 // Este middleware protege rutas privadas como /upload, /videos, /get-key, etc.
 function verifyToken(req, res, next) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (token == null) return res.status(401).json({ error: "No se proporcionó token" });
-    
-    // Verificar con la CLAVE PÚBLICA usando algoritmo ES256
-    jwt.verify(token, PUBLIC_KEY, { algorithms: ['ES256'] }, (err, user) => {
-        if (err) {
-            console.error('Error al verificar token:', err.message);
-            return res.status(403).json({ error: "Token inválido" });
-        }
-        req.user = user;
-        next();
-    });
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'No se proporcionó token' });
+    const session = sessions.get(token);
+    if (!session || session.expiresAt < Date.now()) {
+        return res.status(403).json({ error: 'Token inválido o expirado' });
+    }
+    req.user = { id: session.userId, username: session.username };
+    next();
 }
 // Final del punto 3
 
 
 async function main() {
-    const db = await dbPromise;
-
-    // Backend - Punto 2: Inicio de Sesión y Emisión de Tokens
-    // Este endpoint permite a los usuarios iniciar sesión de manera segura.
-    // Se valida el nombre de usuario y la contraseña proporcionados.
-    // Si las credenciales son correctas, se genera un token JWT firmado con la clave privada.
-    // Este token incluye información del usuario y tiene una validez de 1 hora.
-    app.post('/login', async (req, res) => {
-        console.log("Petición recibida en /login");
-        try {
-            const { username, password } = req.body;
-            const user = await db.get('SELECT * FROM users WHERE username = ?', [username]);
-            if (!user) {
-                return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
-            }
-            if (await bcrypt.compare(password, user.hash)) {
-                // Crear el payload con información del usuario
-                const payload = { id: user.id, username: user.username, rol: user.rol };
-                
-                //  FIRMA DEL TOKEN CON LA CLAVE PRIVADA
-                // Algoritmo: ES256 (ECDSA con SHA-256)
-                // Esto genera una firma digital única que prueba la autenticidad del token
-                const token = jwt.sign(payload, PRIVATE_KEY, { 
-                    algorithm: 'ES256',
-                    expiresIn: '1h' 
+    const dbRaw = await dbPromise;
+    
+    // Crear wrappers promisificados para los métodos de sqlite3
+    const db = {
+        get: promisify(dbRaw.get.bind(dbRaw)),
+        all: promisify(dbRaw.all.bind(dbRaw)),
+        run: function(sql, params) {
+            return new Promise((resolve, reject) => {
+                dbRaw.run(sql, params, function(err) {
+                    if (err) reject(err);
+                    else resolve({ lastID: this.lastID, changes: this.changes });
                 });
-                
-                console.log(`✓ Token firmado exitosamente para usuario: ${username}`);
-                res.json({ token: token });
-            } else {
-                res.status(401).json({ error: "Usuario o contraseña incorrectos" });
-            }
+            });
+        }
+    };
+
+    // Login Zero-Trust: Paso 1 (validación de hash PBKDF2 y desafío)
+    app.post('/login/start', async (req, res) => {
+        try {
+            const { username, passwordHash } = req.body;
+            if (!username || !passwordHash) return res.status(400).json({ error: 'Faltan campos' });
+            const user = await db.get('SELECT id, username, hash FROM users WHERE username = ?', [username]);
+            if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
+            if (passwordHash !== user.hash) return res.status(401).json({ error: 'Credenciales inválidas' });
+            const nonce = crypto.randomBytes(32);
+            loginChallenges.set(username, nonce);
+            res.json({ nonce: nonce.toString('base64') });
         } catch (err) {
-            console.error("Error en /login:", err.message);
-            res.status(500).json({ error: "Error interno del servidor" });
+            console.error('Error en /login/start:', err.message);
+            res.status(500).json({ error: 'Error interno del servidor' });
+        }
+    });
+
+    // Login Zero-Trust: Paso 2 (respuesta con firma RSA-PSS y emisión de token de sesión UUID)
+    app.post('/login/finish', async (req, res) => {
+        try {
+            const { username, signatureBase64 } = req.body;
+            if (!username || !signatureBase64) return res.status(400).json({ error: 'Faltan campos' });
+            const nonce = loginChallenges.get(username);
+            if (!nonce) return res.status(400).json({ error: 'Desafío no encontrado o expirado' });
+
+            const user = await db.get('SELECT id, public_key FROM users WHERE username = ?', [username]);
+            if (!user || !user.public_key) return res.status(401).json({ error: 'Usuario inválido' });
+
+            const verifier = crypto.createVerify('RSA-SHA256');
+            verifier.update(nonce);
+            verifier.end();
+            const signature = Buffer.from(signatureBase64, 'base64');
+            const ok = verifier.verify({ key: user.public_key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST }, signature);
+            if (!ok) return res.status(401).json({ error: 'Firma inválida' });
+
+            loginChallenges.delete(username);
+            const token = crypto.randomUUID();
+            sessions.set(token, { userId: user.id, username, expiresAt: Date.now() + 60 * 60 * 1000 });
+            res.json({ token });
+        } catch (err) {
+            console.error('Error en /login/finish:', err.message);
+            res.status(500).json({ error: 'Error interno del servidor' });
         }
     });
     // Final del punto 2
 
-    // Backend - Punto 1: Registro de Usuarios Seguro
-    // Este endpoint permite registrar nuevos usuarios de manera segura.
-    // Se valida que el nombre de usuario y la contraseña cumplan con los requisitos mínimos.
-    // La contraseña se hashea utilizando bcrypt antes de almacenarse en la base de datos.
+    // Registro Zero-Trust: guarda username, hash PBKDF2 y llave pública
     app.post('/register', async (req, res) => {
-        console.log("Petición recibida en /register");
         try {
-            const { username, password } = req.body;
-            if (!username || !password) {
-                return res.status(400).json({ error: "Usuario y contraseña son requeridos" });
+            const { username, passwordHash, publicKeyPem } = req.body;
+            if (!username || !passwordHash || !publicKeyPem) {
+                return res.status(400).json({ error: 'Usuario, passwordHash y publicKey son requeridos' });
             }
-
-            // Validación de contraseña: al menos 8 caracteres, una mayúscula y un número
-            if (typeof password !== 'string' || password.length < 8) {
-                return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres.' });
-            }
-            const pwChecks = /(?=.*[A-Z])(?=.*\d)/;
-            if (!pwChecks.test(password)) {
-                return res.status(400).json({ error: 'La contraseña debe incluir al menos una letra mayúscula y un número.' });
-            }
-
-            const salt = await bcrypt.genSalt(10);
-            const hash = await bcrypt.hash(password, salt);
             const rol = 'usuario_unificado';
-            await db.run('INSERT INTO users (username, hash, rol) VALUES (?, ?, ?)', [username, hash, rol]);
-            console.log(`¡Nuevo usuario registrado: '${username}'!`);
-            res.status(201).json({ message: "Usuario registrado exitosamente" });
+            await db.run('INSERT INTO users (username, hash, public_key, rol) VALUES (?, ?, ?, ?)', [username, passwordHash, publicKeyPem, rol]);
+            res.status(201).json({ message: 'Usuario registrado exitosamente' });
         } catch (err) {
             if (err.message.includes('UNIQUE constraint failed')) {
-                return res.status(409).json({ error: "El nombre de usuario ya está en uso" });
+                return res.status(409).json({ error: 'El nombre de usuario ya está en uso' });
             }
-            console.error("Error en /register:", err.message);
-            res.status(500).json({ error: "Error interno del servidor" });
+            console.error('Error en /register:', err.message);
+            res.status(500).json({ error: 'Error interno del servidor' });
         }
     });
     // Final del punto 1
 
-    // Backend - Punto 4: Subida de Videos con Cifrado Seguro
-    // Este endpoint permite recibir archivos de video mediante multipart/form-data.
-    // Los videos se almacenan temporalmente en la carpeta uploads/temp.
-    // Posteriormente, se cifran utilizando el servicio encryptVideo con el algoritmo XChaCha20-Poly1305.
-    // Las claves de cifrado y los nonces generados se almacenan de forma segura en la base de datos.
-    // Finalmente, los archivos de video sin cifrar se eliminan automáticamente tras un cifrado exitoso.
-    app.post('/upload', verifyToken, upload.single('video'), async (req, res) => {
-        console.log("Petición recibida en /upload");
+    // Subida Zero-Trust: el video llega ya cifrado y con sobre (BYOK)
+    app.post('/api/upload-video', verifyToken, upload.single('video'), async (req, res) => {
+        console.log("Petición recibida en /api/upload-video");
 
         // Si Multer falló o no envió archivo
         if (!req.file) {
@@ -300,8 +174,10 @@ async function main() {
         const tempFilePath = req.file.path; // Ruta completa del archivo en temp/
         const tempFileName = req.file.filename; // Nombre del archivo en temp/
         const title = req.body.title;
-        const description = req.body.description || ''; 
+        const description = req.body.description || '';
         const uploaderId = req.user.id;
+        const wrappedKeyBase64 = req.body.wrappedKeyBase64;
+        const wrappedHeaderBase64 = req.body.wrappedHeaderBase64;
 
         if (!title) {
             // Limpieza: si faltan datos, borramos el archivo temporal
@@ -325,22 +201,25 @@ async function main() {
 
 
             // --- PASO 2 (NUEVO): Llamar al Servicio de Cifrado ---
-            console.log(`[Crypto] Iniciando proceso de cifrado para video ID ${videoId}...`);
-            
-            // Esta función es asíncrona: espera a que el cifrado termine.
-            // Devuelve los datos necesarios y, crucialmente, BORRA el archivo de temp/.
-            const cryptoResult = await encryptVideo(tempFileName);
-            
-            // cryptoResult contiene las llaves ENVUELTAS con RSA-OAEP en Base64:
-            // { encryptedFilename, wrappedKeyBase64, wrappedHeaderBase64 }
-            console.log(`[Crypto] Cifrado exitoso. Nuevo archivo: ${cryptoResult.encryptedFilename}`);
+            // En Zero-Trust, el cliente ya envió el archivo cifrado (.enc) y el sobre
+            if (!wrappedKeyBase64 || !wrappedHeaderBase64) {
+                fs.unlinkSync(tempFilePath);
+                return res.status(400).json({ error: 'Faltan sobre y header envueltos' });
+            }
+            console.log(`[Upload] Recibido sobre BYOK para video ${videoId}.`);
 
+            // Mover el archivo de temp/ a encrypted/
+            const encryptedDir = path.join(__dirname, 'uploads', 'encrypted');
+            fs.mkdirSync(encryptedDir, { recursive: true });
+            const encryptedFilePath = path.join(encryptedDir, tempFileName);
+            fs.renameSync(tempFilePath, encryptedFilePath);
+            console.log(`[Upload] Archivo movido de temp a encrypted: ${tempFileName}`);
 
             // --- PASO 3 (NUEVO): Guardar las llaves ENVUELTAS en la BD ---
             // Las llaves están protegidas con RSA-OAEP. Sin la clave privada RSA, son inútiles.
             await db.run(
                 'INSERT INTO video_keys (video_id, wrapped_key_base64, wrapped_header_base64) VALUES (?, ?, ?)',
-                [videoId, cryptoResult.wrappedKeyBase64, cryptoResult.wrappedHeaderBase64]
+                [videoId, wrappedKeyBase64, wrappedHeaderBase64]
             );
             console.log(`[DB] Llaves envueltas guardadas seguramente para video ID ${videoId}.`);
 
@@ -349,7 +228,7 @@ async function main() {
             // Ahora que tenemos el archivo final cifrado (.enc), actualizamos el registro.
             await db.run(
                 'UPDATE videos SET filename = ? WHERE id = ?',
-                [cryptoResult.encryptedFilename, videoId]
+                [tempFileName, videoId]
             );
             console.log(`[DB] Registro de video actualizado con el nombre de archivo cifrado.`);
 
@@ -372,7 +251,7 @@ async function main() {
             const videoObj = {
                 id: videoId,
                 title: title,
-                filename: cryptoResult.encryptedFilename,
+                filename: tempFileName,
                 uploader_id: uploaderId,
                 uploader: req.user && req.user.username ? req.user.username : null,
                 created_at: new Date().toISOString()
@@ -380,7 +259,7 @@ async function main() {
 
             // ¡Todo salió bien! Devolvemos también el objeto del video para actualizar la UI sin recargar.
             res.status(201).json({ 
-                message: "¡Video subido, cifrado y asegurado exitosamente!",
+                message: "¡Video cifrado subido exitosamente!",
                 video: videoObj
             });
 
@@ -401,6 +280,42 @@ async function main() {
         }
     });
     // Final del punto 4
+
+    // Endpoint para guardar miniatura (después de la subida del video)
+    app.post('/api/save-thumbnail', verifyToken, async (req, res) => {
+        try {
+            const videoId = req.body.videoId;
+            const thumbnailBase64 = req.body.thumbnail;
+            
+            if (!videoId || !thumbnailBase64) {
+                return res.status(400).json({ error: 'videoId y thumbnail son requeridos' });
+            }
+            
+            // Verificar que el usuario es el dueño del video
+            const video = await db.get('SELECT uploader_id FROM videos WHERE id = ?', [videoId]);
+            if (!video || video.uploader_id !== req.user.id) {
+                return res.status(403).json({ error: 'No tienes permiso para guardar una miniatura para este video' });
+            }
+            
+            // Crear directorio de miniaturas si no existe
+            const thumbnailDir = path.join(__dirname, 'uploads', 'thumbnails');
+            fs.mkdirSync(thumbnailDir, { recursive: true });
+            
+            // Guardar miniatura
+            const thumbnailFilename = `thumb_${videoId}.jpg`;
+            const thumbnailPath = path.join(thumbnailDir, thumbnailFilename);
+            
+            // Convertir base64 a buffer
+            const buffer = Buffer.from(thumbnailBase64.replace(/^data:image\/jpeg;base64,/, ''), 'base64');
+            fs.writeFileSync(thumbnailPath, buffer);
+            
+            console.log(`[Thumbnail] Miniatura guardada para video ${videoId}`);
+            res.json({ message: 'Miniatura guardada exitosamente' });
+        } catch (err) {
+            console.error('Error en /api/save-thumbnail:', err.message);
+            res.status(500).json({ error: 'Error al guardar la miniatura' });
+        }
+    });
 
     // Backend - Punto 5: Listado de Videos
     // Este endpoint devuelve un catálogo de videos disponibles en la base de datos.
@@ -630,13 +545,16 @@ async function main() {
             // 1. Eliminar las llaves del video
             await db.run('DELETE FROM video_keys WHERE video_id = ?', [videoId]);
             
-            // 2. Eliminar permisos asociados
+            // 2. Eliminar envelopes compartidos
+            await db.run('DELETE FROM envelopes WHERE video_id = ?', [videoId]);
+            
+            // 3. Eliminar permisos asociados
             await db.run('DELETE FROM permissions WHERE video_id = ?', [videoId]);
             
-            // 3. Eliminar solicitudes pendientes
+            // 4. Eliminar solicitudes pendientes
             await db.run('DELETE FROM requests WHERE video_id = ?', [videoId]);
             
-            // 4. Finalmente, eliminar el video
+            // 5. Finalmente, eliminar el video
             await db.run('DELETE FROM videos WHERE id = ?', [videoId]);
 
             console.log(`[DELETE /videos/${videoId}] Video y registros relacionados eliminados exitosamente.`);
@@ -648,99 +566,74 @@ async function main() {
         }
     });
 
-    // --- NUEVO: Endpoint para generar y servir thumbnail de un video ---
+    // Zero-Trust: servir thumbnails generados por el frontend
     app.get('/thumbnail/:videoId', async (req, res) => {
-        // Autenticación: aceptar token desde header Authorization o query param
-        const authHeader = req.headers['authorization'];
-        const tokenFromHeader = authHeader && authHeader.split(' ')[1];
-        const tokenFromQuery = req.query.token;
-        const token = tokenFromHeader || tokenFromQuery;
-
-        if (!token) return res.status(401).json({ error: 'No se proporcionó token' });
-
-        // Verificar token con CLAVE PÚBLICA
-        let user;
         try {
-            user = jwt.verify(token, PUBLIC_KEY, { algorithms: ['ES256'] });
-        } catch (err) {
-            console.error('Error al verificar token en /thumbnail:', err.message);
-            return res.status(403).json({ error: 'Token inválido' });
-        }
-
-        const userId = user && user.id;
-        const videoId = req.params.videoId;
-
-        console.log(`[GET /thumbnail/${videoId}] Usuario ${userId} solicita thumbnail.`);
-
-        try {
-            // Verificar que el video existe
-            const video = await db.get('SELECT filename, uploader_id FROM videos WHERE id = ?', [videoId]);
-            if (!video) {
-                return res.status(404).json({ error: 'Video no encontrado.' });
+            const videoId = req.params.videoId;
+            
+            // Obtener token desde query parameter o header
+            let token = req.query.token;
+            console.log('[Thumbnail] Token desde query:', token ? token.substring(0, 20) + '...' : 'null');
+            if (!token) {
+                const authHeader = req.headers.authorization;
+                if (authHeader && authHeader.startsWith('Bearer ')) {
+                    token = authHeader.substring(7);
+                }
             }
-
-            // Verificar permisos (debe tener acceso al video o ser el uploader)
-            const hasPermission = await db.get(
+            
+            if (!token) {
+                console.log('[Thumbnail] Error: Token no proporcionado');
+                return res.status(401).json({ error: 'Token no proporcionado' });
+            }
+            
+            // Verificar token en el sistema de sesiones
+            const session = sessions.get(token);
+            if (!session) {
+                console.log('[Thumbnail] Error: Sesión no encontrada');
+                return res.status(401).json({ error: 'Sesión inválida o expirada' });
+            }
+            
+            if (session.expiresAt < Date.now()) {
+                sessions.delete(token);
+                console.log('[Thumbnail] Error: Sesión expirada');
+                return res.status(401).json({ error: 'Sesión expirada' });
+            }
+            
+            const userId = session.userId;
+            console.log('[Thumbnail] Sesión válida para userId:', userId);
+            
+            // Verificar que el usuario tiene acceso al video
+            const permission = await db.get(
                 'SELECT 1 FROM permissions WHERE user_id = ? AND video_id = ?',
                 [userId, videoId]
             );
-
-            if (!hasPermission && video.uploader_id !== userId) {
-                return res.status(403).json({ error: 'No tienes permiso para ver este thumbnail.' });
-            }
-
-            // SEGURIDAD: Validar que el nombre de archivo no contenga path traversal
-            if (video.filename && (video.filename.includes('..') || video.filename.includes('/') || video.filename.includes('\\'))) {
-                console.error(`[GET /thumbnail/${videoId}] Nombre de archivo sospechoso: ${video.filename}`);
-                return res.status(400).json({ error: "Nombre de archivo inválido." });
-            }
-
-            // Ruta del thumbnail (lo guardaremos en uploads/thumbnails/)
-            const thumbnailDir = path.join(__dirname, 'uploads', 'thumbnails');
-            fs.mkdirSync(thumbnailDir, { recursive: true });
             
+            if (!permission) {
+                return res.status(403).json({ error: 'No tienes acceso a este video' });
+            }
+            
+            const thumbnailDir = path.join(__dirname, 'uploads', 'thumbnails');
             const thumbnailFilename = `thumb_${videoId}.jpg`;
             const thumbnailPath = path.join(thumbnailDir, thumbnailFilename);
+            
+            // Verificar que la ruta está dentro del directorio permitido (prevención de path traversal)
             const normalizedThumbnailPath = path.normalize(thumbnailPath);
-
-            // SEGURIDAD: Verificar que la ruta del thumbnail esté dentro del directorio permitido
             if (!normalizedThumbnailPath.startsWith(thumbnailDir)) {
-                console.error(`[GET /thumbnail/${videoId}] Intento de path traversal en thumbnail: ${normalizedThumbnailPath}`);
-                return res.status(403).json({ error: "Acceso denegado." });
+                return res.status(400).json({ error: 'Ruta inválida' });
             }
-
-            // Si el thumbnail ya existe, servirlo directamente
+            
+            // Si el thumbnail existe, servirlo
             if (fs.existsSync(normalizedThumbnailPath)) {
-                return res.sendFile(normalizedThumbnailPath);
+                res.setHeader('Cache-Control', 'public, max-age=86400');
+                res.setHeader('Content-Type', 'image/jpeg');
+                res.sendFile(normalizedThumbnailPath);
+            } else {
+                // Si no existe, devolver un placeholder
+                res.status(404).json({ error: 'Thumbnail no disponible aún' });
             }
-
-            // Si no existe, generarlo
-            const { generateThumbnail } = require('./cryptoService.js');
-            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
-            
-            if (!keyRow) {
-                return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
-            }
-
-            const encryptedDir = path.join(__dirname, 'uploads', 'encrypted');
-            const encryptedPath = path.join(encryptedDir, video.filename);
-            const normalizedEncPath = path.normalize(encryptedPath);
-            
-            // SEGURIDAD: Verificar que la ruta esté dentro del directorio permitido
-            if (!normalizedEncPath.startsWith(encryptedDir)) {
-                console.error(`[GET /thumbnail/${videoId}] Intento de acceso fuera del directorio: ${normalizedEncPath}`);
-                return res.status(403).json({ error: "Acceso denegado." });
-            }
-            
-            await generateThumbnail(normalizedEncPath, keyRow.wrapped_key_base64, keyRow.wrapped_header_base64, normalizedThumbnailPath);
-            
-            console.log(`[GET /thumbnail/${videoId}] Thumbnail generado exitosamente.`);
-            res.sendFile(normalizedThumbnailPath);
-
         } catch (err) {
-            console.error(`[GET /thumbnail/${videoId}] Error:`, err.message || err);
-            // Si falla la generación, devolver una imagen placeholder
-            res.status(500).json({ error: 'Error al generar thumbnail.' });
+            console.error('Error en /thumbnail/:videoId:', err.message);
+            res.status(500).json({ error: 'Error al obtener el thumbnail' });
         }
     });
     // Un usuario autenticado envía el ID del video que quiere ver.
@@ -948,8 +841,8 @@ async function main() {
         // 3. Configurar cabeceras para indicar que es un stream de video
         res.writeHead(200, {
             'Content-Length': fileSize,
-            // Usamos un tipo MIME genérico para datos binarios, ya que no es un mp4 normal
-            'Content-Type': 'application/octet-stream',
+            // Usamos text/plain porque el archivo está en base64
+            'Content-Type': 'text/plain',
             // Sugerir al navegador que es un contenido para reproducir, no para descargar
             'Content-Disposition': 'inline'
         });
@@ -967,10 +860,7 @@ async function main() {
     });
     // ------------------------------------------------
 
-    // --- NUEVO: Endpoint para entregar la clave/nonce de un video protegido ---
-    // Devuelve las llaves ENVUELTAS. El cliente NO puede desenvolverlas.
-    // Este endpoint está principalmente para compatibilidad, pero las llaves envueltas
-    // son inútiles en el cliente sin la clave privada RSA (que solo existe en el servidor).
+    // Entregar sobre/envuelto para el usuario autenticado 
     app.get('/get-key/:videoId', verifyToken, async (req, res) => {
         const userId = req.user && req.user.id;
         const videoId = Number(req.params.videoId);
@@ -988,17 +878,44 @@ async function main() {
                 return res.status(403).json({ error: 'No tienes permiso para obtener la clave de este video.' });
             }
 
+            // Si hay un sobre específico del usuario, usarlo; si no, usar el del uploader
+            const envRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM envelopes WHERE user_id = ? AND video_id = ?', [userId, videoId]);
+            if (envRow) {
+                return res.json({ wrappedKeyBase64: envRow.wrapped_key_base64, wrappedHeaderBase64: envRow.wrapped_header_base64 });
+            }
             const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
-            if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
-
-            // NOTA: Estas llaves están envueltas con RSA-OAEP en Base64. Sin la clave privada RSA
-            // (que solo existe en el servidor), son completamente inútiles para el cliente.
-            res.json({ 
-                wrappedKeyBase64: keyRow.wrapped_key_base64, 
-                wrappedHeaderBase64: keyRow.wrapped_header_base64
-            });
+            if (!keyRow) return res.status(404).json({ error: 'No se encontró sobre para este video.' });
+            res.json({ wrappedKeyBase64: keyRow.wrapped_key_base64, wrappedHeaderBase64: keyRow.wrapped_header_base64 });
         } catch (err) {
             console.error('[GET /get-key] Error:', err);
+            res.status(500).json({ error: 'Error interno al obtener la clave.' });
+        }
+    });
+
+    // Endpoint para obtener la envoltura ORIGINAL del propietario (desde video_keys)
+    // Usado para revocación - necesita la envoltura del uploader, no la del usuario actual
+    app.get('/get-owner-key/:videoId', verifyToken, async (req, res) => {
+        const userId = req.user && req.user.id;
+        const videoId = Number(req.params.videoId);
+
+        if (!videoId) return res.status(400).json({ error: 'videoId inválido' });
+
+        try {
+            // Verificar que el usuario sea el propietario del video
+            const video = await db.get('SELECT uploader_id FROM videos WHERE id = ?', [videoId]);
+            if (!video) return res.status(404).json({ error: 'Video no encontrado' });
+            
+            if (video.uploader_id !== userId) {
+                return res.status(403).json({ error: 'Solo el propietario puede obtener la envoltura original' });
+            }
+
+            // Obtener la envoltura original desde video_keys
+            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
+            if (!keyRow) return res.status(404).json({ error: 'No se encontró envoltura original para este video.' });
+            
+            res.json({ wrappedKeyBase64: keyRow.wrapped_key_base64, wrappedHeaderBase64: keyRow.wrapped_header_base64 });
+        } catch (err) {
+            console.error('[GET /get-owner-key] Error:', err);
             res.status(500).json({ error: 'Error interno al obtener la clave.' });
         }
     });
@@ -1013,79 +930,181 @@ async function main() {
         console.log('Carpeta encrypted no encontrada en uploads; /uploads no será mapeada.');
     }
 
-    // --- NUEVO: Endpoint para reproducir (DESCIFRADO en servidor) un video por ID ---
-    // Este endpoint está protegido y solo entrega el contenido descifrado si el usuario tiene permiso.
-    // Soporta token via query param (?token=...) para permitir uso directo en <video src="">
-    app.get('/play/:videoId', async (req, res) => {
+    // Zero-Trust: reproducir descifrado lo hace el cliente; backend sirve cifrado
+    app.get('/play/:videoId', verifyToken, async (req, res) => {
+        const userId = req.user && req.user.id;
+        const videoId = Number(req.params.videoId);
+        if (!videoId) return res.status(400).json({ error: 'videoId inválido' });
         try {
-            // Autenticación: aceptar token desde header Authorization o query param
-            const authHeader = req.headers['authorization'];
-            const tokenFromHeader = authHeader && authHeader.split(' ')[1];
-            const tokenFromQuery = req.query.token;
-            const token = tokenFromHeader || tokenFromQuery;
-
-            if (!token) return res.status(401).json({ error: 'No se proporcionó token' });
-
-            // Verificar token con CLAVE PÚBLICA
-            let user;
-            try {
-                user = jwt.verify(token, PUBLIC_KEY, { algorithms: ['ES256'] });
-            } catch (err) {
-                console.error('Error al verificar token en /play:', err.message);
-                return res.status(403).json({ error: 'Token inválido' });
-            }
-
-            const userId = user && user.id;
-            const videoId = Number(req.params.videoId);
-            if (!videoId) return res.status(400).json({ error: 'videoId inválido' });
-
-            // Verificar permiso o ser uploader
             const perm = await db.get('SELECT 1 FROM permissions WHERE user_id = ? AND video_id = ?', [userId, videoId]);
             const videoRow = await db.get('SELECT filename, uploader_id FROM videos WHERE id = ?', [videoId]);
             if (!videoRow) return res.status(404).json({ error: 'Video no encontrado' });
             if (!perm && videoRow.uploader_id !== userId) return res.status(403).json({ error: 'No tienes permiso para ver este video' });
 
-            // SEGURIDAD: Validar que el nombre de archivo no contenga path traversal
             if (videoRow.filename && (videoRow.filename.includes('..') || videoRow.filename.includes('/') || videoRow.filename.includes('\\'))) {
-                console.error(`[GET /play/${videoId}] Nombre de archivo sospechoso: ${videoRow.filename}`);
-                return res.status(400).json({ error: "Nombre de archivo inválido." });
+                return res.status(400).json({ error: 'Nombre de archivo inválido' });
             }
-
             const encryptedDir = path.join(__dirname, 'uploads', 'encrypted');
             const filePath = path.join(encryptedDir, videoRow.filename);
             const normalizedPath = path.normalize(filePath);
-            
-            // SEGURIDAD: Verificar que la ruta esté dentro del directorio permitido
-            if (!normalizedPath.startsWith(encryptedDir)) {
-                console.error(`[GET /play/${videoId}] Intento de acceso fuera del directorio: ${normalizedPath}`);
-                return res.status(403).json({ error: "Acceso denegado." });
-            }
-            
-            if (!fs.existsSync(normalizedPath)) return res.status(404).json({ error: 'Archivo cifrado no encontrado en servidor' });
+            if (!normalizedPath.startsWith(encryptedDir)) return res.status(403).json({ error: 'Acceso denegado' });
+            if (!fs.existsSync(normalizedPath)) return res.status(404).json({ error: 'Archivo cifrado no encontrado' });
 
-            // Obtener llaves ENVUELTAS con RSA-OAEP y desenvolverlas en el servidor
-            const keyRow = await db.get('SELECT wrapped_key_base64, wrapped_header_base64 FROM video_keys WHERE video_id = ?', [videoId]);
-            if (!keyRow) return res.status(404).json({ error: 'No se encontraron llaves para este video.' });
-
-            // Crear stream descifrado y enviarlo (las llaves se desenvuelven automáticamente en createDecryptStream con RSA-OAEP)
-            const { createDecryptStream } = require('./cryptoService.js');
-            const decryptStream = createDecryptStream(normalizedPath, keyRow.wrapped_key_base64, keyRow.wrapped_header_base64);
-
+            const stat = fs.statSync(normalizedPath);
             res.writeHead(200, {
-                'Content-Type': 'video/mp4',
-                'Content-Disposition': 'inline',
-                'Accept-Ranges': 'none' // Indicar al navegador que no soportamos Range por ahora
+                'Content-Length': stat.size,
+                'Content-Type': 'text/plain',
+                'Content-Disposition': 'inline'
             });
-
-            decryptStream.pipe(res);
-            decryptStream.on('error', (err) => {
-                console.error('[/play/:videoId] Error en decryptStream:', err);
-                try { res.end(); } catch (e) {}
-            });
-
+            fs.createReadStream(normalizedPath).pipe(res);
         } catch (err) {
             console.error('Error en /play/:videoId', err);
-            if (!res.headersSent) res.status(500).json({ error: 'Error interno al preparar el video.' });
+            res.status(500).json({ error: 'Error interno' });
+        }
+    });
+
+    // Compartir: registrar permiso y sobre para Usuario B
+    app.post('/share', verifyToken, async (req, res) => {
+        try {
+            const { videoId, targetUsername, wrappedKeyBase64, wrappedHeaderBase64 } = req.body;
+            if (!videoId || !targetUsername || !wrappedKeyBase64 || !wrappedHeaderBase64) {
+                return res.status(400).json({ error: 'Faltan campos' });
+            }
+            const video = await db.get('SELECT id, uploader_id FROM videos WHERE id = ?', [videoId]);
+            if (!video) return res.status(404).json({ error: 'Video no encontrado' });
+            if (video.uploader_id !== req.user.id) return res.status(403).json({ error: 'Solo el dueño puede compartir' });
+            const target = await db.get('SELECT id FROM users WHERE username = ?', [targetUsername]);
+            if (!target) return res.status(404).json({ error: 'Usuario destino no encontrado' });
+            await db.run('INSERT OR IGNORE INTO permissions (user_id, video_id) VALUES (?, ?)', [target.id, videoId]);
+            await db.run('INSERT OR REPLACE INTO envelopes (user_id, video_id, wrapped_key_base64, wrapped_header_base64) VALUES (?, ?, ?, ?)', [target.id, videoId, wrappedKeyBase64, wrappedHeaderBase64]);
+            res.json({ message: 'Compartido exitosamente' });
+        } catch (err) {
+            console.error('Error en /share:', err.message || err);
+            res.status(500).json({ error: 'Error interno' });
+        }
+    });
+
+    // Revocar: eliminar permiso, reencriptar video y regenerar envolturas
+    app.post('/revoke', verifyToken, async (req, res) => {
+        try {
+            const { videoId, targetUsername, newEncryptedVideo, newEnvelopes } = req.body;
+            if (!videoId || !targetUsername) return res.status(400).json({ error: 'Faltan campos' });
+            
+            const video = await db.get('SELECT id, uploader_id, filename FROM videos WHERE id = ?', [videoId]);
+            if (!video) return res.status(404).json({ error: 'Video no encontrado' });
+            if (video.uploader_id !== req.user.id) return res.status(403).json({ error: 'Solo el dueño puede revocar' });
+            
+            const target = await db.get('SELECT id FROM users WHERE username = ?', [targetUsername]);
+            if (!target) return res.status(404).json({ error: 'Usuario destino no encontrado' });
+            
+            // Si se proporciona el video reencriptado y nuevas envolturas, actualizar todo
+            if (newEncryptedVideo && newEnvelopes) {
+                console.log(`[Revoke] Reencriptando video ${videoId} y regenerando envolturas`);
+                
+                // Guardar el nuevo video encriptado
+                const videoPath = path.join(__dirname, 'uploads', 'encrypted', video.filename);
+                fs.writeFileSync(videoPath, newEncryptedVideo, 'utf8');
+                
+                // Eliminar todas las envolturas antiguas
+                await db.run('DELETE FROM envelopes WHERE video_id = ?', [videoId]);
+                
+                // Insertar las nuevas envolturas y actualizar video_keys para el owner
+                let ownerEnvelope = null;
+                for (const envelope of newEnvelopes) {
+                    let userId;
+                    if (envelope.username === 'owner') {
+                        userId = req.user.id;
+                        ownerEnvelope = envelope; // Guardar para actualizar video_keys
+                    } else {
+                        const user = await db.get('SELECT id FROM users WHERE username = ?', [envelope.username]);
+                        if (!user) continue;
+                        userId = user.id;
+                    }
+                    
+                    await db.run(
+                        'INSERT INTO envelopes (user_id, video_id, wrapped_key_base64, wrapped_header_base64) VALUES (?, ?, ?, ?)',
+                        [userId, videoId, envelope.wrappedKey, envelope.wrappedNonce]
+                    );
+                }
+                
+                // CRÍTICO: Actualizar video_keys con el nuevo envelope del owner
+                if (ownerEnvelope) {
+                    await db.run(
+                        'UPDATE video_keys SET wrapped_key_base64 = ?, wrapped_header_base64 = ? WHERE video_id = ?',
+                        [ownerEnvelope.wrappedKey, ownerEnvelope.wrappedNonce, videoId]
+                    );
+                    console.log(`[Revoke] video_keys actualizado con nuevo envelope del owner`);
+                }
+                
+                console.log(`[Revoke] Video reencriptado, ${newEnvelopes.length} envolturas regeneradas`);
+            }
+            
+            // Eliminar permiso del usuario revocado
+            await db.run('DELETE FROM permissions WHERE user_id = ? AND video_id = ?', [target.id, videoId]);
+            
+            res.json({ message: 'Acceso revocado exitosamente' });
+        } catch (err) {
+            console.error('Error en /revoke:', err.message || err);
+            res.status(500).json({ error: 'Error interno: ' + err.message });
+        }
+    });
+
+    // Obtener la propia clave pública del usuario autenticado
+    app.get('/me/publicKey', verifyToken, async (req, res) => {
+        try {
+            const userId = req.user && req.user.id;
+            const user = await db.get('SELECT public_key FROM users WHERE id = ?', [userId]);
+            if (!user || !user.public_key) return res.status(404).json({ error: 'Llave pública no encontrada' });
+            res.json({ publicKey: user.public_key });
+        } catch (err) {
+            console.error('Error en /me/publicKey:', err.message || err);
+            res.status(500).json({ error: 'Error interno' });
+        }
+    });
+
+    // Listar todos los usuarios (para compartir)
+    app.get('/users', verifyToken, async (req, res) => {
+        try {
+            const users = await db.all('SELECT id, username FROM users ORDER BY username');
+            res.json(users);
+        } catch (err) {
+            console.error('Error en /users:', err.message || err);
+            res.status(500).json({ error: 'Error interno' });
+        }
+    });
+
+    // Obtener llave pública de un usuario específico
+    app.get('/users/:username/publicKey', verifyToken, async (req, res) => {
+        try {
+            const { username } = req.params;
+            const user = await db.get('SELECT public_key FROM users WHERE username = ?', [username]);
+            if (!user || !user.public_key) return res.status(404).json({ error: 'Usuario o llave pública no encontrada' });
+            res.json({ publicKey: user.public_key });
+        } catch (err) {
+            console.error('Error en /users/:username/publicKey:', err.message || err);
+            res.status(500).json({ error: 'Error interno' });
+        }
+    });
+
+    // Obtener lista de espectadores de un video (usuarios con acceso)
+    app.get('/videos/:id/viewers', verifyToken, async (req, res) => {
+        try {
+            const videoId = req.params.id;
+            const userId = req.user.id;
+            const video = await db.get('SELECT uploader_id FROM videos WHERE id = ?', [videoId]);
+            if (!video) return res.status(404).json({ error: 'Video no encontrado' });
+            if (video.uploader_id !== userId) return res.status(403).json({ error: 'Solo el dueño puede ver espectadores' });
+            const viewers = await db.all(`
+                SELECT u.id, u.username
+                FROM permissions p
+                JOIN users u ON p.user_id = u.id
+                WHERE p.video_id = ? AND u.id != ?
+                ORDER BY u.username
+            `, [videoId, userId]);
+            res.json(viewers);
+        } catch (err) {
+            console.error('Error en /videos/:id/viewers:', err.message || err);
+            res.status(500).json({ error: 'Error interno' });
         }
     });
 
@@ -1110,8 +1129,8 @@ async function main() {
     }
 
     app.listen(PORT, () => {
-        console.log(`Backend corriendo en http://localhost:${PORT}`);
-        console.log("Endpoints activos: /login, /register, /upload (cifrado activo)");
+        console.log(`Backend Zero-Trust corriendo en http://localhost:${PORT}`);
+        console.log('Endpoints: /register, /login/start, /login/finish, /api/upload-video, /videos, /get-key/:videoId, /stream/:filename, /share, /revoke, /users, /users/:username/publicKey');
     });
 }
 

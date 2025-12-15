@@ -134,6 +134,16 @@
             <h2 class="text-3xl font-semibold mb-6">Subir Nuevo Video</h2>
 
             <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-lg mx-auto">
+                <!-- Sección para subir la llave pública del usuario -->
+                <div class="mb-6">
+                    <label for="public-key-file" class="block text-sm font-medium text-gray-300 mb-2">
+                        Tu llave pública RSA (.pem)
+                    </label>
+                    <input type="file" id="public-key-file" accept=".pem"
+                        class="w-full text-sm text-gray-400 cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 file:cursor-pointer">
+                    <p id="public-key-status" class="text-sm mt-2"></p>
+                </div>
+
                 <form id="upload-form" novalidate>
 
                     <div class="mb-4">
@@ -183,6 +193,85 @@
             </div>
         </section>
 
+        <!-- Share/Revoke Modal -->
+        <div id="share-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+            <div class="bg-gray-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold text-white">Compartir Video</h3>
+                    <button onclick="closeShareModal()" class="text-gray-400 hover:text-white">✕</button>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Video</label>
+                    <p id="share-video-title" class="text-white bg-gray-700 px-3 py-2 rounded"></p>
+                </div>
+
+                <div class="mb-4">
+                    <label for="share-user-select" class="block text-sm font-medium text-gray-300 mb-2">
+                        Compartir con usuario
+                    </label>
+                    <select id="share-user-select" 
+                            class="w-full px-3 py-2 bg-gray-700 text-white border border-gray-600 rounded-lg">
+                        <option value="">-- Selecciona un usuario --</option>
+                    </select>
+                </div>
+
+                <div class="mb-4">
+                    <label for="share-private-key-file" class="block text-sm font-medium text-gray-300 mb-2">
+                        Tu llave privada (.pem)
+                    </label>
+                    <input type="file" id="share-private-key-file"
+                           class="w-full text-sm text-gray-400 cursor-pointer
+                                  file:mr-4 file:py-2 file:px-4
+                                  file:rounded-lg file:border-0 file:font-semibold
+                                  file:bg-blue-600 file:text-white
+                                  hover:file:bg-blue-700 file:cursor-pointer">
+                </div>
+
+                <div class="flex gap-3">
+                    <button onclick="executeShare()" 
+                            class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">
+                        Compartir
+                    </button>
+                    <button onclick="closeShareModal()" 
+                            class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">
+                        Cancelar
+                    </button>
+                </div>
+
+                <p id="share-status" class="text-sm mt-4 text-center"></p>
+            </div>
+        </div>
+
+        <!-- Revoke Modal -->
+        <div id="revoke-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+            <div class="bg-gray-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold text-white">Gestionar Acceso</h3>
+                    <button onclick="closeRevokeModal()" class="text-gray-400 hover:text-white">✕</button>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Video</label>
+                    <p id="revoke-video-title" class="text-white bg-gray-700 px-3 py-2 rounded"></p>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Usuarios con acceso</label>
+                    <div id="viewers-list" class="space-y-2 max-h-64 overflow-y-auto">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <button onclick="closeRevokeModal()" 
+                        class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">
+                    Cerrar
+                </button>
+
+                <p id="revoke-status" class="text-sm mt-4 text-center"></p>
+            </div>
+        </div>
+
         <!-- Reproductor -->
         <section id="player-section" class="content-section">
             <button id="back-button"
@@ -205,51 +294,7 @@
     <!-- Toast container (se usa desde app.js) -->
     <div id="toast-container" class="fixed bottom-4 right-4 flex flex-col-reverse gap-2 z-50"></div>
 
-    <!-- Cargar libsodium antes del script principal (WebAssembly).
-         Usamos un pequeño loader que intenta varios CDNs y expone
-         `window.__sodiumLoadPromise` para depurar/esperar su carga. -->
-    <script>
-        (function(){
-            const candidates = [
-                'https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/sodium.js',
-                'https://unpkg.com/libsodium-wrappers@0.7.13/dist/sodium.js',
-                'https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.13/sodium.min.js'
-            ];
-
-            function tryLoad(url){
-                return new Promise((resolve, reject) => {
-                    const s = document.createElement('script');
-                    s.src = url;
-                    s.async = true;
-                    s.onload = () => {
-                        // allow the script to initialize window.sodium
-                        setTimeout(() => {
-                            if (window.sodium) return resolve(window.sodium);
-                            // some CDNs attach different names, but libsodium-wrappers uses `sodium`
-                            return reject(new Error('sodium not found after load'));
-                        }, 50);
-                    };
-                    s.onerror = () => reject(new Error('failed to load ' + url));
-                    document.head.appendChild(s);
-                });
-            }
-
-            // Try sequentially until one works
-            let p = Promise.reject();
-            candidates.forEach((url) => {
-                p = p.catch(() => tryLoad(url));
-            });
-
-            // Expose a promise for other scripts to await if desired
-            window.__sodiumLoadPromise = p.then((sodium) => {
-                try { console.log('[libsodium-loader] cargado:', sodium ? 'sodium ok' : 'no sodium'); } catch(e){}
-                return sodium;
-            }).catch((err) => {
-                console.warn('[libsodium-loader] No se pudo cargar libsodium desde CDNs:', err);
-                return null;
-            });
-        })();
-    </script>
+    <!-- Eliminado el cargador de CDNs: usamos la versión local servida por el backend -->
 
     <script>
         // Hacer clickeable el logo para ir a Ver Videos
@@ -267,7 +312,8 @@
         });
     </script>
 
-    <!-- Configuración centralizada de la API -->
+    <!-- Scripts cargados al final del body en orden -->
+    <script src="frontend.js"></script>
     <script src="config.js"></script>
     <script src="app.js"></script>
 

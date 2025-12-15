@@ -78,7 +78,24 @@
         <div class="flex gap-8">
             <!-- Video Player Section (Left Side) -->
             <div class="flex-1">
-                <video id="video-player" controls class="w-full rounded-lg shadow-lg bg-black"></video>
+                <!-- Botón para cargar clave privada -->
+                <div id="unlock-video-section" class="mb-4 bg-gray-800 p-6 rounded-lg text-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto mb-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 class="text-xl font-semibold mb-2">Video Cifrado</h3>
+                    <p class="text-gray-400 mb-4">Para ver este video, necesitas tu clave privada (.pem)</p>
+                    <button id="unlock-video-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300">
+                        <span class="flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                            </svg>
+                            Cargar Clave Privada
+                        </span>
+                    </button>
+                </div>
+                
+                <video id="video-player" controls class="w-full rounded-lg shadow-lg bg-black hidden"></video>
                 <div class="mt-4 bg-gray-800 p-4 rounded-lg">
                     <h1 id="video-title" class="text-2xl font-bold mb-2"></h1>
                     <p id="video-author" class="text-gray-300 mb-3">Por: <span class="font-semibold text-white">Cargando...</span></p>
@@ -101,56 +118,45 @@
 
     <!-- Configuración centralizada de la API -->
     <script src="config.js"></script>
+    <script src="frontend.js"></script>
     <script src="video.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            // Show username in header
             const username = localStorage.getItem('username');
             const usernameSpan = document.getElementById('user-display');
             if (username && usernameSpan) {
                 usernameSpan.textContent = 'Hola, ' + username;
             }
 
-            // Setup logout button
             const logoutBtn = document.getElementById('logout-button');
             if (logoutBtn) {
                 logoutBtn.addEventListener('click', () => {
-                    try {
-                        localStorage.removeItem('jwt');
-                        localStorage.removeItem('username');
-                        localStorage.removeItem('registrationMessage');
-                        localStorage.removeItem('currentVideo');
-                    } catch (e) { /* ignore */ }
+                    localStorage.removeItem('jwt');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('registrationMessage');
+                    localStorage.removeItem('currentVideo');
                     window.location.href = 'login.html';
                 });
             }
 
-            // Setup navigation buttons
             const tabVideosBtn = document.getElementById('nav-watch');
             const tabUploadBtn = document.getElementById('nav-upload');
             const tabModifyBtn = document.getElementById('nav-modify');
             const tabRequestsBtn = document.getElementById('nav-requests');
 
-            if (tabVideosBtn) {
-                tabVideosBtn.addEventListener('click', () => {
-                    window.location.href = 'index.html';
-                });
-            }
-
+            if (tabVideosBtn) tabVideosBtn.addEventListener('click', () => window.location.href = 'index.html');
             if (tabUploadBtn) {
                 tabUploadBtn.addEventListener('click', () => {
                     sessionStorage.setItem('activeSection', 'upload');
                     window.location.href = 'index.html';
                 });
             }
-
             if (tabModifyBtn) {
                 tabModifyBtn.addEventListener('click', () => {
                     sessionStorage.setItem('activeSection', 'modify');
                     window.location.href = 'index.html';
                 });
             }
-
             if (tabRequestsBtn) {
                 tabRequestsBtn.addEventListener('click', () => {
                     sessionStorage.setItem('activeSection', 'requests');
@@ -158,28 +164,19 @@
                 });
             }
 
-            // Search functionality with suggestions
             const searchInput = document.getElementById('search-input');
             let suggestionsContainer = null;
             let selectedSuggestionIndex = -1;
-            let allVideos = []; // Almacenar todos los videos disponibles
+            let allVideos = [];
             
-            // Cargar todos los videos para las sugerencias de búsqueda
             const token = localStorage.getItem('jwt') || localStorage.getItem('jwtToken');
             if (token) {
                 fetch(`${API_URL}/videos`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 })
-                .then(response => {
-                    if (!response.ok) throw new Error('Error fetching videos');
-                    return response.json();
-                })
-                .then(videos => {
-                    allVideos = videos; // Guardar todos los videos para las búsquedas
-                })
-                .catch(error => {
-                    console.error('Error fetching all videos for search:', error);
-                });
+                .then(response => response.ok ? response.json() : Promise.reject())
+                .then(videos => allVideos = videos)
+                .catch(error => console.error('Error fetching videos:', error));
             }
             
             if (searchInput) {

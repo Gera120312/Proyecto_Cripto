@@ -1,18 +1,19 @@
-// Encapsulamos la inicialización de la app en una función para poder llamarla
-// ya sea después de que libsodium se inicialice o como fallback si no está disponible.
-function startApp() {
-    document.addEventListener('DOMContentLoaded', () => {
+// app.js - Aplicación Zero-Trust Video Platform con AES-256-GCM (Web Crypto API nativa)
 
-        // --- LÓGICA PARA LA PÁGINA PRINCIPAL (index.html) ---
-        const mainPage = document.getElementById('watch-section');
-        if (mainPage) {
-        
-            // 1. Verificar si el token existe
-            const token = localStorage.getItem('jwt');
-            if (!token) {
-                window.location.href = 'login.html'; // Si no hay token, fuera.
-                return;
-            }
+function startApp() {
+    // Usar API_URL de config.js (definido globalmente por config.js como window.API_BASE_URL)
+    const API_URL = window.API_BASE_URL || 'http://localhost:3000';
+    
+    // --- LÓGICA PARA LA PÁGINA PRINCIPAL (index.html) ---
+    const mainPage = document.getElementById('watch-section');
+    if (mainPage) {
+    
+        // 1. Verificar si el token existe
+        const token = localStorage.getItem('jwt');
+        if (!token) {
+            window.location.href = 'login.html'; // Si no hay token, fuera.
+            return;
+        }
 
             // 3. Lógica para cambiar entre pestañas (Ver/Subir)
             const sections = {
@@ -25,7 +26,6 @@ function startApp() {
                 upload: document.getElementById('nav-upload')
             };
             function showSection(sectionId, push = true) {
-                console.log('[debug] showSection called:', { sectionId, push, time: Date.now() });
                 // Ocultar todas las secciones
                 Object.values(sections).forEach(section => section.classList.remove('active'));
 
@@ -49,7 +49,6 @@ function startApp() {
                 // Manejo del History API: pushState para que la navegación por atrás/adelante funcione entre pestañas
                 try {
                     if (push) {
-                        console.log('[debug] pushState ->', sectionId);
                         history.pushState({ section: sectionId }, '', '');
                         // Evitar que un popstate inmediato (algunos navegadores/desbordes) nos devuelva a otra pestaña
                         try { ignorePopstate = true; setTimeout(() => { ignorePopstate = false; }, 300); } catch (e) {}
@@ -139,7 +138,6 @@ function startApp() {
 
             // Manejar cambios de historial (botones atrás/adelante del navegador)
             window.addEventListener('popstate', (event) => {
-                console.log('[debug] popstate event:', { state: event.state, ignorePopstate, time: Date.now() });
                 
                 // Verificar si el usuario cambió (ej: logout -> login con otro user -> back)
                 const storedUser = localStorage.getItem('username');
@@ -347,6 +345,7 @@ function startApp() {
             // 4. Lógica para el formulario de subida (envío real a /upload)
             const uploadForm = document.getElementById('upload-form');
             const uploadStatus = document.getElementById('upload-status');
+            const publicKeyFileInput = document.getElementById('public-key-file');
 
             // File input UI helpers: show selected filename and a "Quitar" button
             let fileInputEl = document.getElementById('video-file');
@@ -423,83 +422,59 @@ function startApp() {
                 const file = fileInput.files[0];
 
                 if (!title || !file) {
-                        showStatus(null, 'Debes proporcionar un título y un archivo.', 'red');
+                    showStatus(null, 'Debes proporcionar un título y un archivo.', 'red');
                     return;
                 }
 
-                // Construir FormData
-                const formData = new FormData();
-                formData.append('title', title);
-                formData.append('description', description);
-                formData.append('video', file);
+                if (!publicKeyFileInput.files.length) {
+                    showStatus(null, 'Debes cargar tu llave pública (.pem) antes de subir un video.', 'red');
+                    return;
+                }
 
-                // Mostrar estado como toast emergente
-                showStatus(null, 'Subiendo...', 'yellow');
+                const publicKeyPem = await publicKeyFileInput.files[0].text();
+
+                // Subida cifrada cliente: usar E2EE.uploadEncryptedVideo
+                showStatus(null, 'Cifrando y subiendo...', 'yellow');
                 console.log('[debug] upload start', { title, fileName: file ? file.name : null, time: Date.now() });
 
                 try {
                     const token = localStorage.getItem('jwt');
 
-                    console.log('[debug] about to fetch /upload');
-                    const res = await fetch(`${API_URL}/upload`, {
-                        method: 'POST',
-                        headers: {
-                            // No establecer Content-Type: el navegador lo hará automáticamente para FormData
-                            Authorization: token ? `Bearer ${token}` : ''
-                        },
-                        body: formData
-                    });
+                    const data = await E2EE.uploadEncryptedVideo({ token, file, title, description, userPublicKeyPem: publicKeyPem });
 
-                    console.log('[debug] fetch returned', { status: res.status, redirected: res.redirected, url: res.url });
-                    const data = await res.json().catch(() => ({}));
-                    console.log('[debug] response json', data);
+                    const successMsg = (data && data.message) || 'Video cifrado subido correctamente.';
+                    console.log('[debug] upload succeeded:', successMsg, data);
+                    // Mostrar confirmación emergente
+                    showStatus(null, successMsg + ' Generando miniatura...', 'green');
 
-                    if (res.ok) {
-                        const successMsg = data.message || 'Video subido correctamente.';
-                        console.log('[debug] upload succeeded:', successMsg, data);
-                        // Mostrar confirmación emergente en la esquina (no usar el área de upload)
-                        showStatus(null, successMsg, 'green');
-
-                        // Mantener al usuario en la pestaña de subida sin añadir entrada al historial
-                        showSection('upload', false);
-                        try { history.replaceState({ section: 'upload' }, '', ''); } catch (e) {}
-
-                        // Limpiar formulario
-                        uploadForm.reset();
-                        try { updateFileActions(); } catch (e) {}
-
-                        // Refrescar la lista de videos en segundo plano para que la galería muestre el nuevo video
-                        try { if (typeof loadVideos === 'function') loadVideos(); } catch (e) { console.warn('loadVideos fallo al refrescar:', e); }
-
-                        // Opcional: añadir tarjeta al grid (si backend devuelve info)
-                        if (data.video) {
-                            const videoGrid = document.getElementById('video-list');
-                            const card = document.createElement('div');
-                            card.className = 'video-card bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer';
-                            card.setAttribute('data-video-id', data.video.id || 'new');
-                            card.setAttribute('data-filename', data.video.filename || '');
-                            card.setAttribute('data-title', data.video.title || '');
-                            card.innerHTML = `\n<img src="https://placehold.co/600x400/1f2937/7dd3fc?text=${encodeURIComponent(data.video.title || 'Nuevo')}" class="w-full h-48 object-cover">\n<div class="p-4">\n<h3 class="font-bold text-lg">${data.video.title || 'Nuevo'}</h3>\n<p class="text-gray-400 text-sm">Subido por ti</p>\n</div>`;
-                            videoGrid.prepend(card);
+                    // Generar y guardar miniatura
+                    try {
+                        if (data && data.videoId) {
+                            // Usar generateAndSaveThumbnail desde frontend.js
+                            if (window.E2EE && window.E2EE.generateAndSaveThumbnail) {
+                                await window.E2EE.generateAndSaveThumbnail(token, data.videoId, file);
+                                console.log('[Thumbnail] Miniatura generada y guardada para video', data.videoId);
+                            }
                         }
-
-                    } else {
-                        console.log('[debug] upload failed response', { status: res.status, data });
-                        showStatus(null, data.error || 'Fallo al subir el video.', 'red');
+                    } catch (thumbErr) {
+                        console.warn('[Thumbnail] Error al generar miniatura:', thumbErr);
                     }
 
-                } catch (err) {
-                    console.error('Error al subir:', err);
-                    showStatus(null, 'Error de conexión al subir el video.', 'red');
-                }
-            });
+                    // Mantener al usuario en la pestaña de subida sin añadir entrada al historial
+                    showSection('upload', false);
+                    try { history.replaceState({ section: 'upload' }, '', ''); } catch (e) {}
 
-            // Listeners para detectar si la página se recarga o se descarga
-            window.addEventListener('beforeunload', (e) => {
-                console.log('[debug] beforeunload fired', { time: Date.now() });
-            });
-            window.addEventListener('unload', (e) => {
-                console.log('[debug] unload fired', { time: Date.now() });
+                    // Limpiar formulario
+                    uploadForm.reset();
+                    try { updateFileActions(); } catch (e) {}
+
+                    // Refrescar la lista de videos en segundo plano para que la galería muestre el nuevo video
+                    try { if (typeof loadVideos === 'function') loadVideos(); } catch (e) { console.warn('loadVideos fallo al refrescar:', e); }
+
+                } catch (err) {
+                    console.error('Error al subir el video:', err);
+                    showStatus(null, 'Error al subir el video. Inténtalo de nuevo.', 'red');
+                }
             });
 
             // Función auxiliar para mostrar mensajes de estado (mantiene clases de tamaño/centrado)
@@ -799,7 +774,9 @@ function startApp() {
                         
                         // Crear imagen de thumbnail
                         const token = localStorage.getItem('jwt');
-                        const thumbnailUrl = `${API_URL}/thumbnail/${video.id}?token=${encodeURIComponent(token)}`;
+                        const apiUrl = window.API_BASE_URL || 'http://localhost:3000';
+                        const thumbnailUrl = `${apiUrl}/thumbnail/${video.id}?token=${encodeURIComponent(token)}`;
+                        console.log('[Thumbnail] URL generada:', thumbnailUrl, 'API_URL:', apiUrl);
                         const placeholderUrl = `https://placehold.co/600x400/1f2937/7dd3fc?text=${encodeURIComponent(video.title)}`;
                         
                         // Escapar el título y descripción para evitar problemas con comillas
@@ -823,10 +800,16 @@ function startApp() {
                                         Eliminar
                                     </button>
                                 </div>
-                                <button onclick="manageViewers(${video.id}, '${safeTitle}')" 
-                                        class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition">
-                                    Espectadores
-                                </button>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button onclick="openShareModal(${video.id}, '${safeTitle}')" 
+                                            class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition">
+                                        Compartir
+                                    </button>
+                                    <button onclick="openRevokeModal(${video.id}, '${safeTitle}')" 
+                                            class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition">
+                                        Espectadores
+                                    </button>
+                                </div>
                             </div>
                         `;
                         modifyVideosListContainer.appendChild(videoCard);
@@ -1122,7 +1105,6 @@ function startApp() {
                                         <div class="h-10 w-10 rounded-full bg-indigo-600 flex items-center justify-center">
                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                                            </svg>
                                         </div>
                                     </div>
                                     <div class="ml-3 flex-1">
@@ -1262,6 +1244,9 @@ function startApp() {
                     } catch (e) { resolve(false); }
                 });
             }
+            
+            // Hacer showConfirm accesible globalmente
+            window.showConfirm = showConfirm;
 
             // Función global para aprobar o rechazar solicitudes (usa modal en-page)
             window.handleRequest = async (requestId, action) => {
@@ -1530,13 +1515,16 @@ function startApp() {
 
                         // URL del thumbnail real con manejo de errores
                         const token = localStorage.getItem('jwt');
+                        const apiUrl = window.API_BASE_URL || 'http://localhost:3000';
                         const videoTitleEncoded = encodeURIComponent(video.title || 'Video');
                         const placeholderUrl = `https://placehold.co/600x400/1f2937/7dd3fc?text=${videoTitleEncoded}`;
                         let thumbnailUrl = placeholderUrl;
                         
                         if (hasAccess && token) {
                             try {
-                                thumbnailUrl = `${API_URL}/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
+                                console.log('[LoadVideos Thumbnail] API_URL:', apiUrl, 'videoId:', video.id);
+                                thumbnailUrl = `${apiUrl}/thumbnail/${video.id}?token=${encodeURIComponent(token)}&t=${Date.now()}`;
+                                console.log('[LoadVideos Thumbnail] URL generada:', thumbnailUrl);
                             } catch (e) {
                                 console.warn('Error generando URL de thumbnail:', e);
                                 thumbnailUrl = placeholderUrl;
@@ -1602,6 +1590,7 @@ function startApp() {
                         }
 
                         // Los botones "Reproducir" ya llaman a playVideo() directamente (via onclick en buttonHTML)
+                       
                         // No necesitamos listener adicional en la tarjeta
 
                         grid.appendChild(card);
@@ -2006,19 +1995,277 @@ function startApp() {
                 }
             } catch (e) { /* no crítico */ }
         }
-    }); // Fin de DOMContentLoaded
 } // Fin de startApp()
 
-// Intentar inicializar esperándo a libsodium; si no existe, arrancar de todos modos.
-if (typeof sodium !== 'undefined' && sodium && sodium.ready && typeof sodium.ready.then === 'function') {
-    sodium.ready.then(() => {
-        console.log("[Libsodium] Librería criptográfica cargada e inicializada en el navegador.");
-        startApp();
-    }).catch((err) => {
-        console.warn('[Libsodium] sodium.ready falló:', err);
-        startApp();
-    });
-} else {
-    console.warn('[Libsodium] libsodium no disponible; arrancando app sin esperar WASM.');
-    startApp();
+// === SHARE/REVOKE MODAL FUNCTIONS (Global scope) ===
+
+let currentShareVideoId = null;
+let currentShareVideoTitle = null;
+
+async function openShareModal(videoId, videoTitle) {
+    const API_URL = window.API_BASE_URL || 'http://localhost:3000';
+    currentShareVideoId = videoId;
+    currentShareVideoTitle = videoTitle;
+    
+    const modal = document.getElementById('share-modal');
+    const titleEl = document.getElementById('share-video-title');
+    const userSelect = document.getElementById('share-user-select');
+    const statusEl = document.getElementById('share-status');
+    
+    titleEl.textContent = videoTitle;
+    statusEl.textContent = '';
+    document.getElementById('share-private-key-file').value = '';
+    
+    // Fetch available users
+    try {
+        const token = localStorage.getItem('jwt');
+        
+        // Obtener lista de todos los usuarios
+        const usersResponse = await fetch(`${API_URL}/users`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!usersResponse.ok) throw new Error('Error al obtener usuarios');
+        const users = await usersResponse.json();
+        
+        // Obtener lista de espectadores que ya tienen acceso
+        const viewersResponse = await fetch(`${API_URL}/videos/${videoId}/viewers`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const viewers = viewersResponse.ok ? await viewersResponse.json() : [];
+        const viewerUsernames = new Set(viewers.map(v => v.username));
+        
+        const currentUsername = localStorage.getItem('username');
+        
+        // Clear and populate select - excluir usuarios que ya tienen acceso
+        userSelect.innerHTML = '<option value="">-- Selecciona un usuario --</option>';
+        users.forEach(user => {
+            if (user.username !== currentUsername && !viewerUsernames.has(user.username)) {
+                const option = document.createElement('option');
+                option.value = user.username;
+                option.textContent = user.username;
+                userSelect.appendChild(option);
+            }
+        });
+        
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    } catch (error) {
+        console.error('Error opening share modal:', error);
+        alert('Error al cargar lista de usuarios: ' + error.message);
+    }
 }
+
+function closeShareModal() {
+    const modal = document.getElementById('share-modal');
+    modal.classList.remove('flex');
+    modal.classList.add('hidden');
+    currentShareVideoId = null;
+    currentShareVideoTitle = null;
+}
+
+async function executeShare() {
+    const API_URL = window.API_BASE_URL || 'http://localhost:3000';
+    const targetUsername = document.getElementById('share-user-select').value;
+    const privateKeyFile = document.getElementById('share-private-key-file').files[0];
+    const statusEl = document.getElementById('share-status');
+    
+    if (!targetUsername) {
+        statusEl.textContent = 'Por favor selecciona un usuario';
+        statusEl.className = 'text-sm mt-4 text-center text-red-400';
+        return;
+    }
+    
+    if (!privateKeyFile) {
+        statusEl.textContent = 'Por favor carga tu llave privada';
+        statusEl.className = 'text-sm mt-4 text-center text-red-400';
+        return;
+    }
+    
+    try {
+        statusEl.textContent = 'Compartiendo...';
+        statusEl.className = 'text-sm mt-4 text-center text-yellow-400';
+        
+        const privateKeyPem = await privateKeyFile.text();
+        const token = localStorage.getItem('jwt');
+        
+        // Step 1: Get the owner's envelope for this video (use get-owner-key to ensure we get from video_keys)
+        const envResp = await fetch(`${API_URL}/get-owner-key/${currentShareVideoId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!envResp.ok) throw new Error('No se pudo obtener sobre del video');
+        const { wrappedKeyBase64, wrappedHeaderBase64 } = await envResp.json();
+        
+        // Step 2: Get target user's public key
+        const pubKeyResp = await fetch(`${API_URL}/users/${targetUsername}/publicKey`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!pubKeyResp.ok) throw new Error('No se pudo obtener llave pública del usuario');
+        const { publicKey: targetPublicKeyPem } = await pubKeyResp.json();
+        
+        // Step 3: Call E2EE.shareVideo
+        await window.E2EE.shareVideo({
+            token,
+            videoId: currentShareVideoId,
+            ownerPrivateKeyPem: privateKeyPem,
+            wrappedKeyBase64,
+            wrappedHeaderBase64,
+            targetPublicKeyPem,
+            targetUsername
+        });
+        
+        statusEl.textContent = '✓ Video compartido exitosamente';
+        statusEl.className = 'text-sm mt-4 text-center text-green-400';
+        
+        // Limpiar el input de llave privada
+        document.getElementById('share-private-key-file').value = '';
+        
+        setTimeout(() => {
+            closeShareModal();
+        }, 1500);
+        
+    } catch (error) {
+        console.error('Error sharing video:', error);
+        statusEl.textContent = 'Error: ' + error.message;
+        statusEl.className = 'text-sm mt-4 text-center text-red-400';
+    }
+}
+
+let currentRevokeVideoId = null;
+let currentRevokeVideoTitle = null;
+
+async function openRevokeModal(videoId, videoTitle) {
+    const API_URL = window.API_BASE_URL || 'http://localhost:3000';
+    currentRevokeVideoId = videoId;
+    currentRevokeVideoTitle = videoTitle;
+    
+    const modal = document.getElementById('revoke-modal');
+    const titleEl = document.getElementById('revoke-video-title');
+    const viewersList = document.getElementById('viewers-list');
+    const statusEl = document.getElementById('revoke-status');
+    
+    titleEl.textContent = videoTitle;
+    statusEl.textContent = '';
+    viewersList.innerHTML = '<p class="text-gray-400 text-center">Cargando...</p>';
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    
+    // Fetch viewers
+    try {
+        const token = localStorage.getItem('jwt');
+        const response = await fetch(`${API_URL}/videos/${videoId}/viewers`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!response.ok) throw new Error('Error al obtener espectadores');
+        
+        const viewers = await response.json();
+        
+        if (viewers.length === 0) {
+            viewersList.innerHTML = '<p class="text-gray-400 text-center">No hay usuarios con acceso compartido</p>';
+        } else {
+            viewersList.innerHTML = '';
+            viewers.forEach(viewer => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center bg-gray-700 px-3 py-2 rounded';
+                item.innerHTML = `
+                    <span class="text-white">${viewer.username}</span>
+                    <button onclick="executeRevoke(${viewer.id}, '${viewer.username}')" 
+                            class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded">
+                        Revocar
+                    </button>
+                `;
+                viewersList.appendChild(item);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading viewers:', error);
+        viewersList.innerHTML = '<p class="text-red-400 text-center">Error al cargar espectadores</p>';
+    }
+}
+
+function closeRevokeModal() {
+    const modal = document.getElementById('revoke-modal');
+    modal.classList.remove('flex');
+    modal.classList.add('hidden');
+    currentRevokeVideoId = null;
+    currentRevokeVideoTitle = null;
+}
+
+async function executeRevoke(userId, username) {
+    const API_URL = window.API_BASE_URL || 'http://localhost:3000';
+    const statusEl = document.getElementById('revoke-status');
+    
+    const confirmed = await window.showConfirm(`¿Revocar acceso de ${username}?\n\nEste proceso reencriptará el video para mayor seguridad.\n\nNecesitarás proporcionar tu clave privada (.pem) para continuar.`, {
+        acceptText: 'Revocar',
+        cancelText: 'Cancelar'
+    });
+    
+    if (!confirmed) {
+        return;
+    }
+    
+    // Solicitar la clave privada del propietario
+    const privateKeyFile = await new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.pem';
+        input.onchange = (e) => resolve(e.target.files[0]);
+        input.click();
+    });
+    
+    if (!privateKeyFile) {
+        statusEl.textContent = 'Se requiere la clave privada para revocar';
+        statusEl.className = 'text-sm mt-4 text-center text-red-400';
+        return;
+    }
+    
+    try {
+        statusEl.textContent = 'Leyendo clave privada...';
+        statusEl.className = 'text-sm mt-4 text-center text-yellow-400';
+        
+        const privateKeyPem = await privateKeyFile.text();
+        const token = localStorage.getItem('jwt');
+        
+        // Obtener información del video
+        const videoResp = await fetch(`${API_URL}/videos`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const videos = await videoResp.json();
+        const video = videos.find(v => v.id === currentRevokeVideoId);
+        
+        if (!video) {
+            throw new Error('Video no encontrado');
+        }
+        
+        statusEl.textContent = 'Revocando y reencriptando video...';
+        statusEl.className = 'text-sm mt-4 text-center text-yellow-400';
+        
+        await window.E2EE.revokeAccess({
+            token,
+            videoId: currentRevokeVideoId,
+            targetUsername: username,
+            ownerPrivateKeyPem: privateKeyPem,
+            filename: video.filename
+        });
+        
+        statusEl.textContent = '✓ Acceso revocado y video reencriptado';
+        statusEl.className = 'text-sm mt-4 text-center text-green-400';
+        
+        // Reload viewers list
+        setTimeout(() => {
+            openRevokeModal(currentRevokeVideoId, currentRevokeVideoTitle);
+        }, 1500);
+        
+    } catch (error) {
+        console.error('Error revoking access:', error);
+        statusEl.textContent = 'Error: ' + error.message;
+        statusEl.className = 'text-sm mt-4 text-center text-red-400';
+    }
+}
+
+// Iniciar app cuando el DOM esté listo (no necesitamos libsodium porque usamos AES-GCM nativo)
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[App] DOM listo, iniciando app');
+    startApp();
+});

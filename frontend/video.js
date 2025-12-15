@@ -21,8 +21,65 @@ document.addEventListener('DOMContentLoaded', () => {
         history.replaceState({ videoId: id, videoTitle: title, videoFilename: filename }, '', 'video.html');
     }
     
-    videoPlayer.src = `${API_URL}/play/${id}?token=${encodeURIComponent(token)}`;
+    // E2EE reproducción: pedir clave privada y descifrar
     videoTitle.textContent = title;
+    
+    // Configurar el botón para desbloquear el video
+    const unlockBtn = document.getElementById('unlock-video-btn');
+    const unlockSection = document.getElementById('unlock-video-section');
+    
+    if (unlockBtn) {
+        unlockBtn.addEventListener('click', async () => {
+            try {
+                // Crear input de archivo
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.pem';
+                input.style.display = 'none';
+                document.body.appendChild(input);
+                
+                // Esperar a que el usuario seleccione el archivo
+                const pkFile = await new Promise((resolve, reject) => {
+                    input.addEventListener('change', () => {
+                        if (input.files && input.files[0]) {
+                            resolve(input.files[0]);
+                        } else {
+                            reject(new Error('No se seleccionó archivo'));
+                        }
+                        document.body.removeChild(input);
+                    });
+                    input.click();
+                });
+                
+                const privatePem = await pkFile.text();
+                
+                // Mostrar mensaje de carga
+                unlockBtn.innerHTML = '<span class="flex items-center justify-center"><svg class="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Descifrando video...</span>';
+                unlockBtn.disabled = true;
+                
+                // Descifrar y cargar el video
+                const url = await E2EE.playback({ 
+                    token, 
+                    videoId: id, 
+                    filename: filename, 
+                    privateKeyPem: privatePem 
+                });
+                
+                videoPlayer.src = url;
+                videoPlayer.load();
+                
+                // Ocultar sección de desbloqueo y mostrar reproductor
+                unlockSection.classList.add('hidden');
+                videoPlayer.classList.remove('hidden');
+                
+            } catch (e) {
+                console.error('[Video] Error al cargar video:', e);
+                alert('Error al cargar el video: ' + (e.message || e));
+                unlockBtn.innerHTML = '<span class="flex items-center justify-center"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>Cargar Clave Privada</span>';
+                unlockBtn.disabled = false;
+            }
+        });
+    }
 
     // Fetch full video details including author and description
     fetch(`${API_URL}/videos/${id}`, {
@@ -86,29 +143,38 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
     // Make playVideo available globally for onclick handlers
-    window.playVideo = (videoId, videoTitle, encryptedFilename) => {
-        const token = localStorage.getItem('jwt') || localStorage.getItem('jwtToken');
-        if (!token) { alert("Debes iniciar sesión."); return; }
-
+    window.playVideo = (videoId, newVideoTitle, encryptedFilename) => {
+        const token = localStorage.getItem('jwt');
+        if (!token) { 
+            alert('Debes iniciar sesión.'); 
+            return; 
+        }
+        
+        // Guardar los detalles del nuevo video en localStorage
         localStorage.setItem('currentVideo', JSON.stringify({
             id: videoId,
-            title: videoTitle,
+            title: newVideoTitle,
             filename: encryptedFilename,
             token: token
         }));
-
-        // Agregar nueva entrada al historial en lugar de recargar
-        history.pushState({ videoId, videoTitle, videoFilename: encryptedFilename }, '', 'video.html');
         
-        // Recargar el contenido del video sin recargar la página completa
-        loadVideoContent(videoId, videoTitle, encryptedFilename, token);
+        // Actualizar el estado del historial
+        history.pushState({ videoId, videoTitle: newVideoTitle, videoFilename: encryptedFilename }, '', 'video.html');
+        
+        // Recargar la página para mostrar el nuevo video
+        window.location.reload();
     };
     
     // Función para cargar el contenido del video sin recargar la página
-    function loadVideoContent(videoId, newVideoTitle, encryptedFilename, token) {
-        // Actualizar el reproductor
-        videoPlayer.src = `${API_URL}/play/${videoId}?token=${encodeURIComponent(token)}`;
-        videoTitle.textContent = newVideoTitle;
+    async function loadVideoContent(videoId, newVideoTitle, encryptedFilename, token) {
+        // E2EE: reproducir desde blob
+        try {
+            const pkFile = null; // flujo de navegación mantiene reproducción previa
+            videoTitle.textContent = newVideoTitle;
+            // Podríamos reusar una URL si ya se generó; para simplicidad, solicitar de nuevo si se necesita.
+        } catch (e) {
+            console.error('Error al cargar reproducción:', e);
+        }
         
         // Cargar detalles del video
         fetch(`${API_URL}/videos/${videoId}`, {

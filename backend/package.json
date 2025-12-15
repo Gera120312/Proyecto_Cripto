@@ -7,15 +7,14 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.18.2",
     "express-rate-limit": "^6.7.0",
-    "jsonwebtoken": "^9.0.0",
+    "libsodium": "^0.7.15",
+    "libsodium-wrappers": "^0.7.15",
+    "libsodium-wrappers-sumo": "^0.7.15",
     "multer": "^2.0.2",
-    "sodium-native": "^5.0.10",
-    "sqlite": "^4.1.2",
     "sqlite3": "^5.1.6"
   }
 }
